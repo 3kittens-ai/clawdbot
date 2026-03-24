@@ -85,6 +85,7 @@ export type FeishuProbeResult = BaseProbeResult<string> & {
 export type FeishuMediaInfo = {
   path: string;
   contentType?: string;
+  fileName?: string;
   placeholder: string;
 };
 
