@@ -7,8 +7,11 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import datetime
+import warnings
+import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import pandas as pd
 
@@ -102,6 +105,7 @@ SHORT_TO_LONG_CITY_VALUES = {
     "海东地区": "海东市",
     "海南州": "海南藏族自治州",
     "湘西州": "湘西土家族苗族自治州",
+    "玉树州": "玉树藏族自治州",
     "白沙县": "白沙黎族自治县",
     "红河州": "红河哈尼族彝族自治州",
     "黔东南州": "黔东南苗族侗族自治州",
@@ -132,9 +136,30 @@ ADMIN_SUFFIXES = [
     "自治县",
     "地区",
     "盟",
+    "州",
     "市",
     "县",
 ]
+
+EXCEL_DATE_STYLE_IDS = {
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    27,
+    30,
+    36,
+    45,
+    46,
+    47,
+    50,
+    57,
+}
 
 AUTO_TAGS_HEADING = "七、 导入新增标签候选"
 SQLITE_BUSY_TIMEOUT_MS = 30000
@@ -231,7 +256,252 @@ def normalize_city(value: object, known_cities: set[str]) -> tuple[str, str | No
 
 
 def read_excel(excel_path: Path) -> pd.DataFrame:
-    return pd.read_excel(excel_path)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Workbook contains no default style.*", category=UserWarning)
+        try:
+            return pd.read_excel(excel_path)
+        except ValueError as exc:
+            if "valid column name" not in str(exc):
+                raise
+    return read_excel_with_xlsx_xml_fallback(excel_path)
+
+
+def read_excel_with_xlsx_xml_fallback(excel_path: Path) -> pd.DataFrame:
+    if not zipfile.is_zipfile(excel_path):
+        raise ValueError("Broken-workbook fallback requires an Excel zip container")
+
+    with zipfile.ZipFile(excel_path) as archive:
+        if "xl/workbook.xml" not in archive.namelist():
+            raise ValueError("Broken-workbook fallback requires an .xlsx-compatible workbook payload")
+        shared_strings = load_shared_strings(archive)
+        date_style_ids = load_date_style_ids(archive)
+        uses_1904_date_system = workbook_uses_1904_date_system(archive)
+        sheet_path = resolve_first_sheet_path(archive)
+        rows = parse_sheet_rows(archive, sheet_path, shared_strings, date_style_ids, uses_1904_date_system)
+
+    if not rows:
+        return pd.DataFrame()
+
+    header_row = next((row for row in rows if any(str(value).strip() for value in row)), rows[0])
+    header_index = rows.index(header_row)
+    headers = [str(value).strip() if value is not None else "" for value in header_row]
+    normalized_headers = []
+    for index, header in enumerate(headers, start=1):
+        normalized_headers.append(header or f"unnamed_{index}")
+    data_rows = rows[header_index + 1 :]
+    return pd.DataFrame(data_rows, columns=normalized_headers)
+
+
+def resolve_first_sheet_path(archive: zipfile.ZipFile) -> str:
+    workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
+    namespace = {"ns": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    rel_namespace = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    first_sheet = workbook_root.find("ns:sheets/ns:sheet", namespace)
+    if first_sheet is None:
+        raise ValueError("Workbook does not contain any sheets")
+    rel_id = first_sheet.attrib.get(f"{rel_namespace}id")
+    if not rel_id:
+        raise ValueError("Workbook first sheet is missing relationship id")
+
+    rels_root = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+    rels_namespace = {"ns": "http://schemas.openxmlformats.org/package/2006/relationships"}
+    for rel in rels_root.findall("ns:Relationship", rels_namespace):
+        if rel.attrib.get("Id") == rel_id:
+            target = rel.attrib.get("Target", "")
+            normalized_target = target.lstrip("/")
+            return normalized_target if normalized_target.startswith("xl/") else f"xl/{normalized_target}"
+    raise ValueError(f"Workbook relationship {rel_id} not found")
+
+
+def load_shared_strings(archive: zipfile.ZipFile) -> list[str]:
+    try:
+        xml_bytes = archive.read("xl/sharedStrings.xml")
+    except KeyError:
+        return []
+    root = ET.fromstring(xml_bytes)
+    namespace = {"ns": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    strings: list[str] = []
+    for item in root.findall("ns:si", namespace):
+        text_parts = [node.text or "" for node in item.findall(".//ns:t", namespace)]
+        strings.append("".join(text_parts))
+    return strings
+
+
+def workbook_uses_1904_date_system(archive: zipfile.ZipFile) -> bool:
+    workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
+    namespace = {"ns": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    workbook_props = workbook_root.find("ns:workbookPr", namespace)
+    if workbook_props is None:
+        return False
+    return workbook_props.attrib.get("date1904") == "1"
+
+
+def load_date_style_ids(archive: zipfile.ZipFile) -> set[int]:
+    try:
+        styles_root = ET.fromstring(archive.read("xl/styles.xml"))
+    except KeyError:
+        return set(EXCEL_DATE_STYLE_IDS)
+
+    namespace = {"ns": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    custom_date_formats: set[int] = set()
+    num_fmts = styles_root.find("ns:numFmts", namespace)
+    if num_fmts is not None:
+        for num_fmt in num_fmts.findall("ns:numFmt", namespace):
+            num_fmt_id = parse_style_id(num_fmt.attrib.get("numFmtId"))
+            format_code = num_fmt.attrib.get("formatCode", "")
+            if num_fmt_id is not None and is_excel_date_format(format_code):
+                custom_date_formats.add(num_fmt_id)
+
+    date_style_ids: set[int] = set()
+    cell_xfs = styles_root.find("ns:cellXfs", namespace)
+    if cell_xfs is None:
+        return set(EXCEL_DATE_STYLE_IDS)
+    for index, cell_xf in enumerate(cell_xfs.findall("ns:xf", namespace)):
+        num_fmt_id = parse_style_id(cell_xf.attrib.get("numFmtId"))
+        if num_fmt_id is None:
+            continue
+        if num_fmt_id in EXCEL_DATE_STYLE_IDS or num_fmt_id in custom_date_formats:
+            date_style_ids.add(index)
+    return date_style_ids
+
+
+def parse_style_id(raw_value: str | None) -> int | None:
+    if raw_value is None or raw_value == "":
+        return None
+    try:
+        return int(raw_value)
+    except ValueError:
+        return None
+
+
+def is_excel_date_format(format_code: str) -> bool:
+    if not format_code:
+        return False
+    normalized = re.sub(r'".*?"|\[[^\]]+\]|\\.|_.', "", format_code).lower()
+    if "general" in normalized:
+        return False
+    return any(token in normalized for token in ("yy", "dd", "mm", "hh", "ss"))
+
+
+def parse_sheet_rows(
+    archive: zipfile.ZipFile,
+    sheet_path: str,
+    shared_strings: list[str],
+    date_style_ids: set[int],
+    uses_1904_date_system: bool,
+) -> list[list[object]]:
+    root = ET.fromstring(archive.read(sheet_path))
+    namespace = {"ns": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    rows: list[list[object]] = []
+    for row in root.findall(".//ns:sheetData/ns:row", namespace):
+        parsed = parse_sheet_row(row, namespace, shared_strings, date_style_ids, uses_1904_date_system)
+        if parsed:
+            rows.append(parsed)
+    return rows
+
+
+def parse_sheet_row(
+    row: ET.Element,
+    namespace: dict[str, str],
+    shared_strings: list[str],
+    date_style_ids: set[int],
+    uses_1904_date_system: bool,
+) -> list[object]:
+    values_by_column: dict[int, object] = {}
+    next_column_index = 1
+    max_column_index = 0
+
+    for cell in row.findall("ns:c", namespace):
+        cell_ref = cell.attrib.get("r", "")
+        column_index = extract_column_index(cell_ref) or next_column_index
+        next_column_index = max(next_column_index, column_index + 1)
+        max_column_index = max(max_column_index, column_index)
+        values_by_column[column_index] = parse_cell_value(
+            cell,
+            namespace,
+            shared_strings,
+            date_style_ids,
+            uses_1904_date_system,
+        )
+
+    if max_column_index == 0:
+        return []
+    return [values_by_column.get(index, "") for index in range(1, max_column_index + 1)]
+
+
+def extract_column_index(cell_ref: str) -> int | None:
+    match = re.match(r"^([A-Z]+)\d+$", cell_ref.strip(), flags=re.IGNORECASE)
+    if not match:
+        return None
+    letters = match.group(1).upper()
+    index = 0
+    for letter in letters:
+        index = index * 26 + (ord(letter) - ord("A") + 1)
+    return index
+
+
+def parse_cell_value(
+    cell: ET.Element,
+    namespace: dict[str, str],
+    shared_strings: list[str],
+    date_style_ids: set[int],
+    uses_1904_date_system: bool,
+) -> object:
+    cell_type = cell.attrib.get("t")
+    if cell_type == "inlineStr":
+        return "".join(node.text or "" for node in cell.findall(".//ns:t", namespace))
+
+    value_node = cell.find("ns:v", namespace)
+    raw_value = value_node.text if value_node is not None else ""
+    if raw_value is None:
+        raw_value = ""
+
+    if cell_type == "s":
+        try:
+            return shared_strings[int(raw_value)]
+        except (IndexError, ValueError):
+            return raw_value
+    if cell_type == "b":
+        return raw_value == "1"
+    if cell_type in {"str", "e"}:
+        return raw_value
+
+    if raw_value == "":
+        return ""
+    style_id = parse_style_id(cell.attrib.get("s"))
+    try:
+        numeric = float(raw_value)
+        if style_id in date_style_ids:
+            return convert_excel_serial_date(numeric, uses_1904_date_system)
+        return int(numeric) if numeric.is_integer() else numeric
+    except ValueError:
+        return raw_value
+
+
+def convert_excel_serial_date(serial: float, uses_1904_date_system: bool) -> str:
+    if uses_1904_date_system:
+        base_date = datetime(1904, 1, 1)
+    else:
+        # Excel's default 1900 date system includes the historic leap-year bug.
+        base_date = datetime(1899, 12, 30)
+    converted = base_date + timedelta(days=serial)
+    if converted.time() == datetime.min.time():
+        return converted.strftime("%Y-%m-%d")
+    return converted.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def classify_excel_read_error(error: Exception) -> str:
+    message = str(error)
+    lowered = message.lower()
+    if "valid column name" in lowered:
+        return "Excel 文件结构异常，已尝试兼容读取但仍失败。请重新导出为标准 .xlsx 后再试。"
+    if "broken-workbook fallback requires an .xlsx-compatible workbook payload" in lowered:
+        return "收到的附件不是有效的 Excel 工作簿内容，暂时无法导入。请重新发送原始 Excel 文件。"
+    if "broken-workbook fallback requires an excel zip container" in lowered:
+        return "收到的附件不是可识别的 Excel 文件，暂时无法导入。请发送原始 .xlsx 文件。"
+    if isinstance(error, zipfile.BadZipFile):
+        return "Excel 文件已损坏或内容不完整，暂时无法导入。请重新导出后再试。"
+    return "Excel 文件读取失败。请重新导出为标准 .xlsx 后再试。"
 
 
 def normalize_headers(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
@@ -881,7 +1151,19 @@ def main() -> None:
         print(json.dumps({"status": "error", "message": f"Excel file not found: {excel_path}"}, ensure_ascii=False))
         return
 
-    df = read_excel(excel_path)
+    try:
+        df = read_excel(excel_path)
+    except Exception as error:
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "message": classify_excel_read_error(error),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
     normalized_df, missing = normalize_headers(df)
     if missing:
         print(
