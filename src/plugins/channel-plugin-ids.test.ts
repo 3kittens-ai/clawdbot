@@ -44,6 +44,12 @@ describe("resolveGatewayStartupPluginIds", () => {
           cliBackends: ["claude-cli"],
         },
         {
+          id: "openclaw-weixin",
+          channels: ["openclaw-weixin"],
+          origin: "global",
+          enabledByDefault: undefined,
+        },
+        {
           id: "diagnostics-otel",
           channels: [],
           origin: "bundled",
@@ -67,6 +73,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   it("includes configured channels, explicit bundled sidecars, and enabled non-bundled sidecars", () => {
     const config = {
       plugins: {
+        allow: ["openclaw-weixin"],
         entries: {
           "diagnostics-otel": { enabled: true },
         },
@@ -90,6 +97,22 @@ describe("resolveGatewayStartupPluginIds", () => {
     ).toEqual(["discord", "anthropic", "diagnostics-otel", "custom-sidecar"]);
   });
 
+  it("keeps enabled external channel plugins in startup even when config lives outside channels.*", () => {
+    const config = {
+      plugins: {
+        allow: ["openclaw-weixin"],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGatewayStartupPluginIds({
+        config,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual(["discord", "openclaw-weixin"]);
+  });
+
   it("does not pull default-on bundled non-channel plugins into startup", () => {
     const config = {} as OpenClawConfig;
 
@@ -99,7 +122,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual(["discord", "custom-sidecar"]);
+    ).toEqual(["discord", "openclaw-weixin", "custom-sidecar"]);
   });
 
   it("auto-loads bundled plugins referenced by configured provider ids", () => {

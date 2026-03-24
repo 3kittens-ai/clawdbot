@@ -750,12 +750,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const tryNative = shouldPreferNativeJiti(modulePath);
     // Pass loader's moduleUrl so the openclaw root can always be resolved even when
     // loading external plugins from outside the installation directory (e.g. ~/.openclaw/extensions/).
-    const aliasMap = buildPluginLoaderAliasMap(
+    const aliasMap = buildPluginLoaderAliasMap({
       modulePath,
-      process.argv[1],
-      import.meta.url,
-      options.pluginSdkResolution,
-    );
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      moduleUrl: import.meta.url,
+      pluginSdkResolution: options.pluginSdkResolution,
+    });
     const cacheKey = JSON.stringify({
       tryNative,
       aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),

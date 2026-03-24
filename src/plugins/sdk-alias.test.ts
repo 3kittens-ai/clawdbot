@@ -486,7 +486,10 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(sourcePluginEntry, 'export const plugin = "demo";\n', "utf-8");
 
     const distAliases = withEnv({ NODE_ENV: undefined }, () =>
-      buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+      buildPluginLoaderAliasMap({
+        modulePath: sourcePluginEntry,
+        pluginSdkResolution: "dist",
+      }),
     );
 
     expect(fs.realpathSync(distAliases["openclaw/plugin-sdk"] ?? "")).toBe(
@@ -498,17 +501,22 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("resolves plugin-sdk aliases for user-installed plugins via the running openclaw argv hint", () => {
-    const { externalPluginEntry, externalPluginRoot, fixture, sourceRootAlias } =
+    const { externalPluginEntry, externalPluginRoot, fixture } =
       createUserInstalledPluginSdkAliasFixture();
 
     const aliases = withCwd(externalPluginRoot, () =>
       withEnv({ NODE_ENV: undefined }, () =>
-        buildPluginLoaderAliasMap(externalPluginEntry, path.join(fixture.root, "openclaw.mjs")),
+        buildPluginLoaderAliasMap({
+          modulePath: externalPluginEntry,
+          argv1: path.join(fixture.root, "openclaw.mjs"),
+          cwd: externalPluginRoot,
+          moduleUrl: pathToFileURL(path.join(fixture.root, "src", "plugins", "loader.ts")).href,
+        }),
       ),
     );
 
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
-      fs.realpathSync(sourceRootAlias),
+      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs")),
     );
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
       fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts")),
@@ -535,11 +543,12 @@ describe("plugin sdk alias helpers", () => {
     // meaning only the moduleUrl hint can bridge the gap.
     const aliases = withCwd(externalPluginRoot, () =>
       withEnv({ NODE_ENV: undefined }, () =>
-        buildPluginLoaderAliasMap(
-          externalPluginEntry,
-          "", // explicitly disable argv1 (empty string bypasses STARTUP_ARGV1 default)
-          loaderModuleUrl,
-        ),
+        buildPluginLoaderAliasMap({
+          modulePath: externalPluginEntry,
+          argv1: "", // explicitly disable argv1 (empty string bypasses STARTUP_ARGV1 default)
+          cwd: externalPluginRoot,
+          moduleUrl: loaderModuleUrl,
+        }),
       ),
     );
 
@@ -548,6 +557,50 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
       fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts")),
+    );
+  });
+
+  it("uses gateway argv1 and cwd hints for plugins loaded outside the OpenClaw package root", () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "zalouser.ts",
+      distFile: "zalouser.js",
+      packageExports: {
+        "./plugin-sdk/zalouser": { default: "./dist/plugin-sdk/zalouser.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    const externalPluginEntry = path.join(
+      makeTempDir(),
+      "extensions",
+      "openclaw-weixin",
+      "index.ts",
+    );
+    mkdirSafeDir(path.dirname(externalPluginEntry));
+    fs.writeFileSync(externalPluginEntry, 'export default { id: "openclaw-weixin" };\n', "utf-8");
+
+    const aliases = withCwd("/tmp", () =>
+      buildPluginLoaderAliasMap({
+        modulePath: externalPluginEntry,
+        argv1: path.join(fixture.root, "openclaw.mjs"),
+        cwd: "/tmp",
+        moduleUrl: pathToFileURL(path.join(fixture.root, "src", "plugins", "loader.ts")).href,
+      }),
+    );
+
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs")),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/zalouser"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "zalouser.ts")),
     );
   });
 
