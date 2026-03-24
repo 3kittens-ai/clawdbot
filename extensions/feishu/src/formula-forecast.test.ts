@@ -68,10 +68,10 @@ describe("parseFormulaForecastRequest", () => {
   it("resolves runtime paths to real source assets", () => {
     const paths = resolveFormulaForecastRuntimePathsForTest();
 
-    expect(paths.modelRoot.endsWith("extensions/feishu/jiuyan-sales/model-sales-jiuyan")).toBe(
+    expect(paths.modelRoot.endsWith("extensions/shared/jiuyan-sales/model-sales-jiuyan")).toBe(
       true,
     );
-    expect(paths.scriptPath.endsWith("scripts/formula_forecast_job.py")).toBe(true);
+    expect(paths.scriptPath.endsWith("scripts/sales_expression_forecast_job.py")).toBe(true);
     expect(paths.dbPath.endsWith("data-base/sales_filtered.sqlite")).toBe(true);
   });
 });

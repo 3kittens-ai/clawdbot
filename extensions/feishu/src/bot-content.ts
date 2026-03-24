@@ -377,6 +377,7 @@ export async function resolveFeishuMediaList(params: {
         out.push({
           path: saved.path,
           contentType: saved.contentType,
+          fileName: result.fileName,
           placeholder: "<media:image>",
         });
         log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
@@ -405,6 +406,7 @@ export async function resolveFeishuMediaList(params: {
         out.push({
           path: saved.path,
           contentType: saved.contentType,
+          fileName: result.fileName || media.fileName,
           placeholder: "<media:video>",
         });
         log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
@@ -444,6 +446,7 @@ export async function resolveFeishuMediaList(params: {
     out.push({
       path: saved.path,
       contentType: saved.contentType,
+      fileName: result.fileName || mediaKeys.fileName,
       placeholder: inferPlaceholder(messageType),
     });
     log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);

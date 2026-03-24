@@ -46,6 +46,7 @@ import {
 } from "./policy.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { maybeHandleSalesDbQueryWorkflow } from "./sales-db-query-workflow.js";
 import { maybeHandleSalesImportWorkflow } from "./sales-import-workflow.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import type { FeishuMessageContext } from "./types.js";
@@ -661,6 +662,26 @@ export async function handleFeishuMessage(params: {
     // authoritative transcript turns.
     log(`feishu[${account.accountId}]: ${inboundLabel}: ${preview}`);
 
+    let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;
+    let quotedContent: string | undefined;
+    if (ctx.parentId) {
+      try {
+        quotedMessageInfo = await getMessageFeishu({
+          cfg,
+          messageId: ctx.parentId,
+          accountId: account.accountId,
+        });
+        if (quotedMessageInfo) {
+          quotedContent = quotedMessageInfo.content;
+          log(
+            `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
+          );
+        }
+      } catch (err) {
+        log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
+      }
+    }
+
     // Resolve media from message
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
     const mediaList = await resolveFeishuMediaList({
@@ -672,7 +693,21 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildAgentMediaPayload(mediaList);
+    const quotedMediaList =
+      quotedMessageInfo?.rawContent && quotedMessageInfo.contentType
+        ? await resolveFeishuMediaList({
+            cfg,
+            messageId: quotedMessageInfo.messageId,
+            messageType: quotedMessageInfo.contentType,
+            content: quotedMessageInfo.rawContent,
+            maxBytes: mediaMaxBytes,
+            log,
+            accountId: account.accountId,
+          })
+        : [];
+    const combinedMediaList =
+      quotedMediaList.length > 0 ? [...mediaList, ...quotedMediaList] : mediaList;
+    const mediaPayload = buildAgentMediaPayload(combinedMediaList);
 
     if (
       await maybeHandleSalesImportWorkflow({
@@ -683,7 +718,7 @@ export async function handleFeishuMessage(params: {
         messageId: ctx.messageId,
         content: ctx.content,
         isGroup,
-        mediaList,
+        mediaList: combinedMediaList,
         log,
       })
     ) {
@@ -722,25 +757,19 @@ export async function handleFeishuMessage(params: {
       return;
     }
 
-    // Fetch quoted/replied message content if parentId exists
-    let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;
-    let quotedContent: string | undefined;
-    if (ctx.parentId) {
-      try {
-        quotedMessageInfo = await getMessageFeishu({
-          cfg,
-          messageId: ctx.parentId,
-          accountId: account.accountId,
-        });
-        if (quotedMessageInfo) {
-          quotedContent = quotedMessageInfo.content;
-          log(
-            `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
-          );
-        }
-      } catch (err) {
-        log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
-      }
+    if (
+      await maybeHandleSalesDbQueryWorkflow({
+        cfg,
+        accountId: account.accountId,
+        chatId: ctx.chatId,
+        senderOpenId: ctx.senderOpenId,
+        messageId: ctx.messageId,
+        content: ctx.content,
+        isGroup,
+        log,
+      })
+    ) {
+      return;
     }
 
     const isTopicSessionForThread =

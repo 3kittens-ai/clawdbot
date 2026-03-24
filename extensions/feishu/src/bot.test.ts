@@ -26,8 +26,10 @@ const {
   mockEnsureConfiguredBindingRouteReady,
   mockResolveBoundConversation,
   mockTouchBinding,
+  mockMaybeHandleSalesDbQueryWorkflow,
   mockMaybeHandleForecastingWorkflow,
   mockMaybeHandleFormulaForecastWorkflow,
+  mockMaybeHandleSalesImportWorkflow,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -61,8 +63,10 @@ const {
   mockEnsureConfiguredBindingRouteReady: vi.fn(async (_params?: unknown) => ({ ok: true })),
   mockResolveBoundConversation: vi.fn(() => null),
   mockTouchBinding: vi.fn(),
+  mockMaybeHandleSalesDbQueryWorkflow: vi.fn(async () => false),
   mockMaybeHandleForecastingWorkflow: vi.fn(async () => false),
   mockMaybeHandleFormulaForecastWorkflow: vi.fn(async () => false),
+  mockMaybeHandleSalesImportWorkflow: vi.fn(async () => false),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -108,8 +112,16 @@ vi.mock("./forecasting-workflow.js", () => ({
   maybeHandleForecastingWorkflow: mockMaybeHandleForecastingWorkflow,
 }));
 
+vi.mock("./sales-db-query-workflow.js", () => ({
+  maybeHandleSalesDbQueryWorkflow: mockMaybeHandleSalesDbQueryWorkflow,
+}));
+
 vi.mock("./formula-forecast.js", () => ({
   maybeHandleFormulaForecastWorkflow: mockMaybeHandleFormulaForecastWorkflow,
+}));
+
+vi.mock("./sales-import-workflow.js", () => ({
+  maybeHandleSalesImportWorkflow: mockMaybeHandleSalesImportWorkflow,
 }));
 
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
@@ -127,6 +139,7 @@ describe("handleFeishuMessage ACP routing", () => {
     vi.clearAllMocks();
     mockMaybeHandleForecastingWorkflow.mockReset().mockResolvedValue(false);
     mockMaybeHandleFormulaForecastWorkflow.mockReset().mockResolvedValue(false);
+    mockMaybeHandleSalesImportWorkflow.mockReset().mockResolvedValue(false);
     mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
       ({ route }) =>
         ({
@@ -138,6 +151,7 @@ describe("handleFeishuMessage ACP routing", () => {
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
+    mockMaybeHandleSalesDbQueryWorkflow.mockReset().mockResolvedValue(false);
     mockResolveAgentRoute.mockReset().mockReturnValue({
       agentId: "main",
       channel: "feishu",
@@ -290,6 +304,29 @@ describe("handleFeishuMessage ACP routing", () => {
 
     expect(mockResolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
     expect(mockEnsureConfiguredBindingRouteReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers forecasting workflow before sales db query for latest predict file requests", async () => {
+    mockMaybeHandleForecastingWorkflow.mockResolvedValue(true);
+
+    await dispatchMessage({
+      cfg: { channels: { feishu: { dmPolicy: "open" } } } as ClawdbotConfig,
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_sender_1" },
+        },
+        message: {
+          message_id: "om_predict_file",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "发我最新销量预测文件" }),
+        },
+      },
+    });
+
+    expect(mockMaybeHandleForecastingWorkflow).toHaveBeenCalledOnce();
+    expect(mockMaybeHandleSalesDbQueryWorkflow).not.toHaveBeenCalled();
   });
 
   it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {
@@ -745,6 +782,70 @@ describe("handleFeishuMessage command authorization", () => {
         ReplyToId: "om_parent_001",
         RootMessageId: "om_root_001",
         ReplyToBody: "quoted content",
+      }),
+    );
+  });
+
+  it("passes quoted excel attachments into the sales import workflow", async () => {
+    mockMaybeHandleSalesImportWorkflow.mockResolvedValueOnce(true);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_excel",
+      chatId: "oc-dm",
+      content: "[File: 销售主题分析.xlsx]",
+      rawContent: JSON.stringify({
+        file_key: "file_key_excel",
+        file_name: "销售主题分析.xlsx",
+      }),
+      contentType: "file",
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("xlsx"),
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      fileName: "销售主题分析.xlsx",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_import",
+        parent_id: "om_parent_excel",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "导入数据库" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockMaybeHandleSalesImportWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "导入数据库",
+        mediaList: expect.arrayContaining([
+          expect.objectContaining({
+            fileName: "销售主题分析.xlsx",
+          }),
+        ]),
+      }),
+    );
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_parent_excel",
+        fileKey: "file_key_excel",
+        type: "file",
       }),
     );
   });
