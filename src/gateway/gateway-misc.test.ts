@@ -355,6 +355,21 @@ describe("resolveNodeCommandAllowlist", () => {
     }
   });
 
+  it("includes macOS calendar add by default", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "macOS 26.3.1",
+        deviceFamily: "Mac",
+      },
+    );
+
+    expect(allow.has("calendar.events")).toBe(true);
+    expect(allow.has("calendar.add")).toBe(true);
+    expect(allow.has("camera.snap")).toBe(false);
+    expect(allow.has("screen.record")).toBe(false);
+  });
+
   it("includes Android notifications and device diagnostics commands by default", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
