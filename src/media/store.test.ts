@@ -221,6 +221,60 @@ describe("media store", () => {
     });
   });
 
+  it("keeps only the newest inbound files within the retention cap", async () => {
+    await withTempStore(async (store) => {
+      const savedPaths: string[] = [];
+      for (let index = 0; index < 105; index += 1) {
+        const saved = await store.saveMediaBuffer(
+          Buffer.from(`file-${index}`),
+          "text/plain",
+          "inbound",
+          5 * 1024 * 1024,
+          `file-${index}.txt`,
+        );
+        savedPaths.push(saved.path);
+      }
+
+      const inboundDir = path.dirname(savedPaths[0]);
+      const remaining = (await fs.readdir(inboundDir)).toSorted();
+
+      expect(remaining).toHaveLength(100);
+      for (const removedPath of savedPaths.slice(0, 5)) {
+        await expect(fs.stat(removedPath)).rejects.toThrow();
+      }
+      for (const keptPath of savedPaths.slice(5)) {
+        const stat = await fs.stat(keptPath);
+        expect(stat.isFile()).toBe(true);
+      }
+    });
+  });
+
+  it("prunes inbound files older than the retention window on save", async () => {
+    await withTempStore(async (store) => {
+      const oldSaved = await store.saveMediaBuffer(
+        Buffer.from("old"),
+        "text/plain",
+        "inbound",
+        5 * 1024 * 1024,
+        "old.txt",
+      );
+      const oldTime = Date.now() - 8 * 24 * 60 * 60 * 1000;
+      await fs.utimes(oldSaved.path, oldTime / 1000, oldTime / 1000);
+
+      const freshSaved = await store.saveMediaBuffer(
+        Buffer.from("fresh"),
+        "text/plain",
+        "inbound",
+        5 * 1024 * 1024,
+        "fresh.txt",
+      );
+
+      await expect(fs.stat(oldSaved.path)).rejects.toThrow();
+      const stat = await fs.stat(freshSaved.path);
+      expect(stat.isFile()).toBe(true);
+    });
+  });
+
   it("prunes empty directory chains after recursive cleanup", async () => {
     await withTempStore(async (store) => {
       const nested = await store.saveMediaBuffer(
