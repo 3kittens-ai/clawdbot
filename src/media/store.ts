@@ -14,6 +14,8 @@ const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
+const INBOUND_MEDIA_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const INBOUND_MEDIA_MAX_FILES = 100;
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
 // inbound media. The containing state/media directories remain 0o700, which is the trust boundary.
 const MEDIA_FILE_MODE = 0o644;
@@ -108,6 +110,55 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     return await run();
   }
+}
+
+function isInboundSubdir(subdir: string): boolean {
+  if (!subdir) {
+    return false;
+  }
+  const normalized = path.posix.normalize(subdir.replaceAll(path.sep, "/"));
+  return normalized === "inbound" || normalized.startsWith("inbound/");
+}
+
+async function pruneRetainedFilesInDir(
+  dir: string,
+  options: {
+    maxAgeMs: number;
+    maxFiles: number;
+  },
+): Promise<void> {
+  const dirEntries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const now = Date.now();
+  const cutoff = now - options.maxAgeMs;
+  const files: Array<{ fullPath: string; mtimeMs: number }> = [];
+
+  for (const entry of dirEntries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    const stat = await fs.stat(fullPath).catch(() => null);
+    if (!stat?.isFile()) {
+      continue;
+    }
+    if (stat.mtimeMs < cutoff) {
+      await fs.rm(fullPath, { force: true }).catch(() => {});
+      continue;
+    }
+    files.push({ fullPath, mtimeMs: stat.mtimeMs });
+  }
+
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const entry of files.slice(options.maxFiles)) {
+    await fs.rm(entry.fullPath, { force: true }).catch(() => {});
+  }
+}
+
+async function pruneInboundMediaRetention(dir: string): Promise<void> {
+  await pruneRetainedFilesInDir(dir, {
+    maxAgeMs: INBOUND_MEDIA_MAX_AGE_MS,
+    maxFiles: INBOUND_MEDIA_MAX_FILES,
+  });
 }
 
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
@@ -405,5 +456,8 @@ export async function saveMediaBuffer(
   const ext = headerExt ?? extensionForMime(mime) ?? "";
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
   await writeSavedMediaBuffer({ dir, id, buffer });
+  if (isInboundSubdir(subdir)) {
+    await pruneInboundMediaRetention(dir);
+  }
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
 }

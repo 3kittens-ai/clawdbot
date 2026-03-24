@@ -92,6 +92,42 @@ describe("logger helpers", () => {
 
     cleanup(todayPath);
   });
+
+  it("keeps only the newest rolling log files within the retention cap", () => {
+    resetLogger();
+    setLoggerOverride({ level: "info" });
+    fs.mkdirSync(DEFAULT_LOG_DIR, { recursive: true });
+
+    const createdPaths: string[] = [];
+    for (let index = 1; index <= 10; index += 1) {
+      const day = String(index).padStart(2, "0");
+      const filePath = path.join(DEFAULT_LOG_DIR, `openclaw-2026-01-${day}.log`);
+      fs.writeFileSync(filePath, `day-${day}`);
+      const time = new Date(`2026-01-${day}T12:00:00Z`);
+      fs.utimesSync(filePath, time, time);
+      createdPaths.push(filePath);
+    }
+
+    const today = localDateString(new Date());
+    const todayPath = path.join(DEFAULT_LOG_DIR, `openclaw-${today}.log`);
+    cleanup(todayPath);
+
+    logInfo("roll-and-prune");
+
+    const retained = fs
+      .readdirSync(DEFAULT_LOG_DIR)
+      .filter((entry) => /^openclaw-\d{4}-\d{2}-\d{2}\.log$/.test(entry));
+
+    expect(retained.length).toBeLessThanOrEqual(7);
+    for (const removedPath of createdPaths.slice(0, 4)) {
+      expect(fs.existsSync(removedPath)).toBe(false);
+    }
+
+    cleanup(todayPath);
+    for (const createdPath of createdPaths.slice(4)) {
+      cleanup(createdPath);
+    }
+  });
 });
 
 describe("globals", () => {

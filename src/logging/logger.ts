@@ -45,7 +45,8 @@ export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legac
 
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
-const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+const MAX_LOG_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const MAX_LOG_FILE_COUNT = 7;
 const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
@@ -355,6 +356,7 @@ function pruneOldRollingLogs(dir: string): void {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     const cutoff = Date.now() - MAX_LOG_AGE_MS;
+    const retained: Array<{ fullPath: string; mtimeMs: number }> = [];
     for (const entry of entries) {
       if (!entry.isFile()) {
         continue;
@@ -367,7 +369,17 @@ function pruneOldRollingLogs(dir: string): void {
         const stat = fs.statSync(fullPath);
         if (stat.mtimeMs < cutoff) {
           fs.rmSync(fullPath, { force: true });
+          continue;
         }
+        retained.push({ fullPath, mtimeMs: stat.mtimeMs });
+      } catch {
+        // ignore errors during pruning
+      }
+    }
+    retained.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const entry of retained.slice(MAX_LOG_FILE_COUNT)) {
+      try {
+        fs.rmSync(entry.fullPath, { force: true });
       } catch {
         // ignore errors during pruning
       }
