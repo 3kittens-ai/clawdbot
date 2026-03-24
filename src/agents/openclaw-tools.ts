@@ -9,6 +9,7 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
+import { createCalendarTool } from "./tools/calendar-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
@@ -167,6 +168,9 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
     }),
     createCanvasTool({ config: options?.config }),
+    createCalendarTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,

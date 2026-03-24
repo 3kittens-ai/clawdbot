@@ -5,6 +5,7 @@ import OpenClawKit
 
 actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
+    private let calendarService: any MacNodeCalendarServicing
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
@@ -12,6 +13,7 @@ actor MacNodeRuntime {
     private var eventSender: (@Sendable (String, String?) async -> Void)?
 
     init(
+        calendarService: any MacNodeCalendarServicing = MacNodeCalendarService(),
         makeMainActorServices: @escaping () async -> any MacNodeRuntimeMainActorServices = {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
@@ -19,6 +21,7 @@ actor MacNodeRuntime {
             try await MacNodeBrowserProxy.shared.request(paramsJSON: paramsJSON)
         })
     {
+        self.calendarService = calendarService
         self.makeMainActorServices = makeMainActorServices
         self.browserProxyRequest = browserProxyRequest
     }
@@ -63,6 +66,9 @@ actor MacNodeRuntime {
                 return try await self.handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await self.handleLocationInvoke(req)
+            case OpenClawCalendarCommand.events.rawValue,
+                 OpenClawCalendarCommand.add.rawValue:
+                return try await self.handleCalendarInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
             case OpenClawSystemCommand.run.rawValue:
@@ -350,6 +356,24 @@ actor MacNodeRuntime {
             screenIndex: params.screenIndex,
             hasAudio: res.hasAudio))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleCalendarInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        switch req.command {
+        case OpenClawCalendarCommand.events.rawValue:
+            let params = (try? Self.decodeParams(OpenClawCalendarEventsParams.self, from: req.paramsJSON)) ??
+                OpenClawCalendarEventsParams()
+            let payload = try await self.calendarService.events(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawCalendarCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawCalendarAddParams.self, from: req.paramsJSON)
+            let payload = try await self.calendarService.add(params: params)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        default:
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
+        }
     }
 
     private func mainActorServices() async -> any MacNodeRuntimeMainActorServices {

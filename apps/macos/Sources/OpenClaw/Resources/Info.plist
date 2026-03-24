@@ -47,6 +47,8 @@
     <string>OpenClaw captures the screen when the agent needs screenshots for context.</string>
     <key>NSCameraUsageDescription</key>
     <string>OpenClaw can capture photos or short video clips when requested by the agent.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>OpenClaw can read and create calendar events when requested by the agent.</string>
 	<key>NSLocationUsageDescription</key>
 	<string>OpenClaw can share your location when requested by the agent.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

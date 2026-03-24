@@ -5,6 +5,30 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeRuntimeTests {
+    private struct FakeCalendarService: MacNodeCalendarServicing {
+        var onEvents: (@Sendable (OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload)?
+        var onAdd: (@Sendable (OpenClawCalendarAddParams) async throws -> OpenClawCalendarAddPayload)?
+
+        func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload {
+            if let onEvents {
+                return try await onEvents(params)
+            }
+            return OpenClawCalendarEventsPayload(events: [])
+        }
+
+        func add(params: OpenClawCalendarAddParams) async throws -> OpenClawCalendarAddPayload {
+            if let onAdd {
+                return try await onAdd(params)
+            }
+            return OpenClawCalendarAddPayload(event: OpenClawCalendarEventPayload(
+                identifier: "test-event",
+                title: params.title,
+                startISO: params.startISO,
+                endISO: params.endISO,
+                isAllDay: params.isAllDay ?? false))
+        }
+    }
+
     @Test func `handle invoke rejects unknown command`() async {
         let runtime = MacNodeRuntime()
         let response = await runtime.handleInvoke(
@@ -162,5 +186,39 @@ struct MacNodeRuntimeTests {
             #expect(response.ok == false)
             #expect(response.error?.message.contains("BROWSER_DISABLED") == true)
         }
+    }
+
+    @Test func `handle invoke calendar add uses injected service`() async throws {
+        let runtime = MacNodeRuntime(
+            calendarService: FakeCalendarService(onAdd: { params in
+                #expect(params.title == "Dentist")
+                return OpenClawCalendarAddPayload(event: OpenClawCalendarEventPayload(
+                    identifier: "evt-1",
+                    title: params.title,
+                    startISO: params.startISO,
+                    endISO: params.endISO,
+                    isAllDay: false,
+                    location: params.location,
+                    calendarTitle: "Calendar"))
+            }))
+
+        let params = OpenClawCalendarAddParams(
+            title: "Dentist",
+            startISO: "2026-03-24T14:00:00Z",
+            endISO: "2026-03-24T15:00:00Z",
+            location: "Clinic")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-calendar-add",
+                command: OpenClawCalendarCommand.add.rawValue,
+                paramsJSON: json))
+
+        #expect(response.ok == true)
+        let payloadJSON = try #require(response.payloadJSON)
+        let payload = try JSONDecoder().decode(OpenClawCalendarAddPayload.self, from: Data(payloadJSON.utf8))
+        #expect(payload.event.identifier == "evt-1")
+        #expect(payload.event.title == "Dentist")
+        #expect(payload.event.location == "Clinic")
     }
 }

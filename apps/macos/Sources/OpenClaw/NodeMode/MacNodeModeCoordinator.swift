@@ -117,7 +117,11 @@ final class MacNodeModeCoordinator {
     }
 
     private func currentCaps() -> [String] {
-        var caps: [String] = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
+        var caps: [String] = [
+            OpenClawCapability.canvas.rawValue,
+            OpenClawCapability.screen.rawValue,
+            OpenClawCapability.calendar.rawValue,
+        ]
         if OpenClawConfigFile.browserControlEnabled() {
             caps.append(OpenClawCapability.browser.rawValue)
         }
@@ -165,6 +169,10 @@ final class MacNodeModeCoordinator {
         }
         if capsSet.contains(OpenClawCapability.location.rawValue) {
             commands.append(OpenClawLocationCommand.get.rawValue)
+        }
+        if capsSet.contains(OpenClawCapability.calendar.rawValue) {
+            commands.append(OpenClawCalendarCommand.events.rawValue)
+            commands.append(OpenClawCalendarCommand.add.rawValue)
         }
 
         return commands

@@ -3,6 +3,7 @@ import ApplicationServices
 import AVFoundation
 import CoreGraphics
 import CoreLocation
+import EventKit
 import Foundation
 import Observation
 import OpenClawIPC
@@ -48,6 +49,8 @@ enum PermissionManager {
             await self.ensureCamera(interactive: interactive)
         case .location:
             await self.ensureLocation(interactive: interactive)
+        case .calendar:
+            await self.ensureCalendar(interactive: interactive)
         }
     }
 
@@ -174,6 +177,20 @@ enum PermissionManager {
         }
     }
 
+    private static func ensureCalendar(interactive: Bool) async -> Bool {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        if EventKitAuthorization.allowsRead(status: status) {
+            return true
+        }
+        guard interactive else { return false }
+        if status == .notDetermined {
+            let store = EKEventStore()
+            return (try? await store.requestFullAccessToEvents()) ?? false
+        }
+        await MainActor.run { CalendarPermissionHelper.openSettings() }
+        return false
+    }
+
     static func voiceWakePermissionsGranted() -> Bool {
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
@@ -221,6 +238,10 @@ enum PermissionManager {
                 let status = CLLocationManager().authorizationStatus
                 results[cap] = CLLocationManager.locationServicesEnabled()
                     && self.isLocationAuthorized(status: status, requireAlways: false)
+
+            case .calendar:
+                let status = EKEventStore.authorizationStatus(for: .event)
+                results[cap] = EventKitAuthorization.allowsWrite(status: status)
             }
         }
         return results
@@ -258,6 +279,15 @@ enum LocationPermissionHelper {
     static func openSettings() {
         SystemSettingsURLSupport.openFirst([
             "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices",
+            "x-apple.systempreferences:com.apple.preference.security",
+        ])
+    }
+}
+
+enum CalendarPermissionHelper {
+    static func openSettings() {
+        SystemSettingsURLSupport.openFirst([
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
             "x-apple.systempreferences:com.apple.preference.security",
         ])
     }
