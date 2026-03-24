@@ -35,6 +35,8 @@ import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sende
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
+import { maybeHandleForecastingWorkflow } from "./forecasting-workflow.js";
+import { maybeHandleFormulaForecastWorkflow } from "./formula-forecast.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
 import {
   resolveFeishuGroupConfig,
@@ -44,6 +46,7 @@ import {
 } from "./policy.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { maybeHandleSalesImportWorkflow } from "./sales-import-workflow.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import type { FeishuMessageContext } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -680,6 +683,54 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
     });
     const mediaPayload = buildAgentMediaPayload(mediaList);
+
+    if (
+      await maybeHandleSalesImportWorkflow({
+        cfg,
+        accountId: account.accountId,
+        chatId: ctx.chatId,
+        senderOpenId: ctx.senderOpenId,
+        messageId: ctx.messageId,
+        content: ctx.content,
+        isGroup,
+        mediaList,
+        log,
+      })
+    ) {
+      return;
+    }
+
+    if (
+      await maybeHandleForecastingWorkflow({
+        cfg,
+        accountId: account.accountId,
+        chatId: ctx.chatId,
+        senderOpenId: ctx.senderOpenId,
+        messageId: ctx.messageId,
+        content: ctx.content,
+        isGroup,
+        mentionedBot: ctx.mentionedBot,
+        log,
+      })
+    ) {
+      return;
+    }
+
+    if (
+      await maybeHandleFormulaForecastWorkflow({
+        cfg,
+        accountId: account.accountId,
+        chatId: ctx.chatId,
+        senderOpenId: ctx.senderOpenId,
+        messageId: ctx.messageId,
+        content: ctx.content,
+        isGroup,
+        mentionedBot: ctx.mentionedBot,
+        log,
+      })
+    ) {
+      return;
+    }
 
     // Fetch quoted/replied message content if parentId exists
     let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;

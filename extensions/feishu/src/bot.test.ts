@@ -191,6 +191,8 @@ const {
   mockEnsureConfiguredBindingRouteReady,
   mockResolveBoundConversation,
   mockTouchBinding,
+  mockMaybeHandleForecastingWorkflow,
+  mockMaybeHandleFormulaForecastWorkflow,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: createReplyDispatcher(),
@@ -224,6 +226,8 @@ const {
   ),
   mockResolveBoundConversation: vi.fn(() => null as BoundConversation),
   mockTouchBinding: vi.fn(),
+  mockMaybeHandleForecastingWorkflow: vi.fn(async () => false),
+  mockMaybeHandleFormulaForecastWorkflow: vi.fn(async () => false),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -266,6 +270,14 @@ vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
   }),
 }));
 
+vi.mock("./forecasting-workflow.js", () => ({
+  maybeHandleForecastingWorkflow: mockMaybeHandleForecastingWorkflow,
+}));
+
+vi.mock("./formula-forecast.js", () => ({
+  maybeHandleFormulaForecastWorkflow: mockMaybeHandleFormulaForecastWorkflow,
+}));
+
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
   const runtime = createRuntimeEnv();
   await handleFeishuMessage({
@@ -279,6 +291,8 @@ async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessa
 describe("handleFeishuMessage ACP routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockMaybeHandleForecastingWorkflow.mockReset().mockResolvedValue(false);
+    mockMaybeHandleFormulaForecastWorkflow.mockReset().mockResolvedValue(false);
     mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
       ({
         route,
@@ -479,6 +493,8 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockMaybeHandleForecastingWorkflow.mockReset().mockResolvedValue(false);
+    mockMaybeHandleFormulaForecastWorkflow.mockReset().mockResolvedValue(false);
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockGetMessageFeishu.mockReset().mockResolvedValue(null);
     mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
