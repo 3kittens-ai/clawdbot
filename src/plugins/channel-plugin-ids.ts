@@ -71,11 +71,17 @@ export function resolveGatewayStartupPluginIds(params: {
   });
   return manifestRegistry.plugins
     .filter((plugin) => {
-      if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
-        return true;
-      }
       if (plugin.channels.length > 0) {
-        return false;
+        if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
+          return true;
+        }
+        return resolveEffectiveEnableState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: pluginsConfig,
+          rootConfig: params.config,
+          enabledByDefault: plugin.enabledByDefault,
+        }).enabled;
       }
       const enabled = resolveEffectiveEnableState({
         id: plugin.id,

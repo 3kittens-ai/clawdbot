@@ -262,6 +262,52 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
   });
 
+  it("copies shared runtime assets into dist and exposes them from dist-runtime", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-shared-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "feishu");
+    const sharedDbPath = path.join(
+      repoRoot,
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite",
+    );
+    fs.mkdirSync(path.dirname(sharedDbPath), { recursive: true });
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
+    fs.writeFileSync(sharedDbPath, "db\n", "utf8");
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const distSharedDbPath = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite",
+    );
+    const runtimeSharedDbPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite",
+    );
+
+    expect(fs.existsSync(distSharedDbPath)).toBe(true);
+    expect(fs.readFileSync(distSharedDbPath, "utf8")).toBe("db\n");
+    expect(fs.lstatSync(runtimeSharedDbPath).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(runtimeSharedDbPath, "utf8")).toBe("db\n");
+  });
+
   it("preserves package metadata needed for bundled plugin discovery from dist-runtime", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-discovery-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "demo");

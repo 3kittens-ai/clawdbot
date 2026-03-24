@@ -107,6 +107,22 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
   }
 }
 
+function syncSharedRuntimeAssets(repoRoot, distExtensionsRoot) {
+  const sourceSharedDir = path.join(repoRoot, "extensions", "shared");
+  const distSharedDir = path.join(distExtensionsRoot, "shared");
+
+  removePathIfExists(distSharedDir);
+  if (!fs.existsSync(sourceSharedDir)) {
+    return;
+  }
+
+  // Shared runtime assets are consumed directly by bundled channels from dist.
+  fs.cpSync(sourceSharedDir, distSharedDir, {
+    recursive: true,
+    dereference: false,
+  });
+}
+
 function linkPluginNodeModules(params) {
   const runtimeNodeModulesDir = path.join(params.runtimePluginDir, "node_modules");
   removePathIfExists(runtimeNodeModulesDir);
@@ -127,6 +143,8 @@ export function stageBundledPluginRuntime(params = {}) {
     removePathIfExists(runtimeRoot);
     return;
   }
+
+  syncSharedRuntimeAssets(repoRoot, distExtensionsRoot);
 
   removePathIfExists(runtimeRoot);
   fs.mkdirSync(runtimeExtensionsRoot, { recursive: true });
