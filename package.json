@@ -321,6 +321,10 @@
       "types": "./dist/plugin-sdk/feishu.d.ts",
       "default": "./dist/plugin-sdk/feishu.js"
     },
+    "./plugin-sdk/jiuyan-sales": {
+      "types": "./dist/plugin-sdk/jiuyan-sales.d.ts",
+      "default": "./dist/plugin-sdk/jiuyan-sales.js"
+    },
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
