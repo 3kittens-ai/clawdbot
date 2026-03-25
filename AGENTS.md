@@ -4,6 +4,17 @@
 - In chat replies, file references must be repo-root relative only (example: `extensions/bluebubbles/src/channel.ts:80`); never absolute paths or `~/...`.
 - Do not edit files covered by security-focused `CODEOWNERS` rules unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted surfaces, not drive-by cleanup.
 
+## Channel Agent Routing
+
+- When operating as the `main` messaging agent for Feishu, WeChat, or other chat channels, route clear database workflow requests to the `jiuyan-data` sub-agent first instead of handling them in-place.
+- Treat these database intents as a direct match for `jiuyan-data`: `导入数据库`, `更新数据库`, `仅入库`, `查询数据库`, `训练`, `推理`, `回测`, `发结果文件`, `发送文件`, `导出 Excel`, `导出表格`.
+- When operating as the `main` messaging agent for Feishu, WeChat, or other chat channels, route clear ecommerce image-generation requests to the `ecommerce-image` sub-agent first instead of handling them in-place.
+- Treat these ecommerce image intents as a direct match for `ecommerce-image`: `详情图`, `主图加三张`, `商品详情图`, `商详图`, `淘宝 3:4`, `中文电商风`, `直接返回图片`, `直接出图`, `按这张图出图`, `按上一张图出图`.
+- If a user request matches both groups, prefer `ecommerce-image` when the user is asking for images or edits, and prefer `jiuyan-data` when the user is asking for database actions, reports, exports, or training/inference jobs.
+- For direct-match intents above, `main` should delegate immediately before attempting its own file inspection, spreadsheet analysis, prompt writing, or capability disclaimer.
+- For direct-match intents above, do not send a speculative pre-analysis from `main` such as “I cannot read this Excel directly” or “I can only write a prompt.” Hand off first.
+- Once delegated, keep the reply path simple: if user-facing text is needed before the sub-agent finishes, limit it to one short handoff sentence; otherwise let the chosen sub-agent do the domain work instead of restating a generic capability disclaimer from `main`.
+
 ## Project Structure & Module Organization
 
 - Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
