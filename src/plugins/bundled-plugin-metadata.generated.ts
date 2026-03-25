@@ -5349,6 +5349,45 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "gemini-image",
+    idHint: "gemini-image",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/gemini-image",
+    packageVersion: "2026.3.23",
+    packageDescription: "OpenClaw Gemini image tool plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "gemini-image",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          model: {
+            type: "string",
+          },
+          fallbackModel: {
+            type: "string",
+          },
+        },
+      },
+      uiHints: {
+        model: {
+          label: "Primary Gemini Image Model",
+          help: "Primary Gemini image model for generate/edit requests.",
+        },
+        fallbackModel: {
+          label: "Fallback Gemini Image Model",
+          help: "Fallback Gemini image model when the primary model does not return image parts.",
+        },
+      },
+    },
+  },
+  {
     dirName: "github-copilot",
     idHint: "github-copilot",
     source: {

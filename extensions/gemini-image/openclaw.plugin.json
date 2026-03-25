@@ -1,0 +1,25 @@
+{
+  "id": "gemini-image",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "model": {
+        "type": "string"
+      },
+      "fallbackModel": {
+        "type": "string"
+      }
+    }
+  },
+  "uiHints": {
+    "model": {
+      "label": "Primary Gemini Image Model",
+      "help": "Primary Gemini image model for generate/edit requests."
+    },
+    "fallbackModel": {
+      "label": "Fallback Gemini Image Model",
+      "help": "Fallback Gemini image model when the primary model does not return image parts."
+    }
+  }
+}
