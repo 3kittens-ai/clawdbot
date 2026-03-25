@@ -48,6 +48,30 @@ describe("parseFormulaForecastRequest", () => {
     });
   });
 
+  it("parses natural-language formula requests with inferred ring-vs-yoy weights", () => {
+    const parsed = parseFormulaForecastRequest(
+      "公式计算销量 未来 3 个月 按照环比和全年同比 各 0.5 的权重",
+    );
+
+    expect(parsed).toEqual({
+      formulaText: "最近一个月销量*0.5 + m12*0.5",
+      normalizedFormula: "m1*0.5 + m12*0.5",
+      horizonMonths: 3,
+      topK: 50,
+    });
+  });
+
+  it("parses natural-language top sku requests without an explicit formula", () => {
+    const parsed = parseFormulaForecastRequest("公式计算 未来 3 个月 前 50 个 sku 销量");
+
+    expect(parsed).toEqual({
+      formulaText: "最近一个月销量",
+      normalizedFormula: "m1",
+      horizonMonths: 3,
+      topK: 50,
+    });
+  });
+
   it("returns null for unrelated messages", () => {
     expect(parseFormulaForecastRequest("最新的销量数据是哪天的")).toBeNull();
   });
