@@ -15,6 +15,7 @@ export type SpawnedToolContext = {
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   workspaceDir?: string;
+  currentMessageText?: string;
 };
 
 export type NormalizedSpawnedRunMetadata = {

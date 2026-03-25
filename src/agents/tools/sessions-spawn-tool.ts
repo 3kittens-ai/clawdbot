@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
+import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -19,6 +23,78 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
+
+const DEFAULT_AUTO_FORWARD_INBOUND_ROOTS = [
+  path.join(os.homedir(), ".openclaw", "media", "inbound"),
+];
+
+function extractInboundMediaPathsFromMessage(currentMessageText?: string): string[] {
+  if (!currentMessageText?.trim()) {
+    return [];
+  }
+  const matches = currentMessageText.matchAll(/\[media attached:\s*([^\]]+)\]/g);
+  const results: string[] = [];
+  const seen = new Set<string>();
+  for (const match of matches) {
+    const body = match[1]?.trim();
+    if (!body) {
+      continue;
+    }
+    const pipeParts = body
+      .split("|")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const candidates = pipeParts.length > 0 ? pipeParts.toReversed() : [body];
+    for (const candidate of candidates) {
+      const withoutMime = candidate.replace(/\s+\([^)]+\)\s*$/, "").trim();
+      if (!withoutMime || seen.has(withoutMime)) {
+        continue;
+      }
+      if (
+        !isInboundPathAllowed({
+          filePath: withoutMime,
+          roots: DEFAULT_AUTO_FORWARD_INBOUND_ROOTS,
+        })
+      ) {
+        continue;
+      }
+      seen.add(withoutMime);
+      results.push(withoutMime);
+      break;
+    }
+  }
+  return results;
+}
+
+async function resolveAutoForwardedInboundPaths(currentMessageText?: string): Promise<string[]> {
+  const candidates = extractInboundMediaPathsFromMessage(currentMessageText);
+  const confirmed: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const stat = await fs.stat(candidate);
+      if (stat.isFile()) {
+        confirmed.push(candidate);
+      }
+    } catch {
+      // Ignore stale prompt references.
+    }
+  }
+  return confirmed;
+}
+
+function appendAutoForwardedFilesToTask(task: string, inboundPaths: readonly string[]): string {
+  if (inboundPaths.length === 0) {
+    return task;
+  }
+  const lines = inboundPaths.map((filePath) => `- ${filePath}`);
+  return [
+    task,
+    "",
+    "Use these inbound attachment file paths as the source files for this task:",
+    ...lines,
+    "Do not guess or substitute a different local file when these attachment paths are present.",
+  ].join("\n");
+}
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -75,6 +151,7 @@ export function createSessionsSpawnTool(
     sandboxed?: boolean;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    currentMessageText?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   return {
@@ -126,6 +203,11 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
+      const autoForwardedInboundPaths =
+        !attachments || attachments.length === 0
+          ? await resolveAutoForwardedInboundPaths(opts?.currentMessageText)
+          : [];
+      const effectiveTask = appendAutoForwardedFilesToTask(task, autoForwardedInboundPaths);
 
       if (streamTo && runtime !== "acp") {
         return jsonResult({
@@ -151,7 +233,7 @@ export function createSessionsSpawnTool(
         }
         const result = await spawnAcpDirect(
           {
-            task,
+            task: effectiveTask,
             label: label || undefined,
             agentId: requestedAgentId,
             resumeSessionId,
@@ -175,7 +257,7 @@ export function createSessionsSpawnTool(
 
       const result = await spawnSubagentDirect(
         {
-          task,
+          task: effectiveTask,
           label: label || undefined,
           agentId: requestedAgentId,
           model: modelOverride,

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
@@ -20,9 +23,9 @@ vi.mock("../acp-spawn.js", () => ({
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
-let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
-
-async function loadFreshSessionsSpawnToolModuleForTest() {
+async function getSessionsSpawnTool(
+  opts?: Parameters<(typeof import("./sessions-spawn-tool.js"))["createSessionsSpawnTool"]>[0],
+) {
   vi.resetModules();
   vi.doMock("../subagent-spawn.js", () => ({
     SUBAGENT_SPAWN_MODES: ["run", "session"],
@@ -33,7 +36,8 @@ async function loadFreshSessionsSpawnToolModuleForTest() {
     ACP_SPAWN_STREAM_TARGETS: ["parent"],
     spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
   }));
-  ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+  const { createSessionsSpawnTool } = await import("./sessions-spawn-tool.js");
+  return createSessionsSpawnTool(opts);
 }
 
 describe("sessions_spawn tool", () => {
@@ -48,11 +52,10 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
-    await loadFreshSessionsSpawnToolModuleForTest();
   });
 
   it("uses subagent runtime by default", async () => {
-    const tool = createSessionsSpawnTool({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       agentChannel: "discord",
       agentAccountId: "default",
@@ -95,7 +98,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
-    const tool = createSessionsSpawnTool({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       workspaceDir: "/parent/workspace",
     });
@@ -114,7 +117,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("routes to ACP runtime when runtime=acp", async () => {
-    const tool = createSessionsSpawnTool({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       agentChannel: "discord",
       agentAccountId: "default",
@@ -154,7 +157,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("forwards ACP sandbox options and requester sandbox context", async () => {
-    const tool = createSessionsSpawnTool({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "agent:main:subagent:parent",
       sandboxed: true,
     });
@@ -179,7 +182,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("passes resumeSessionId through to ACP spawns", async () => {
-    const tool = createSessionsSpawnTool({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
@@ -201,7 +204,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("rejects resumeSessionId without runtime=acp", async () => {
-    const tool = createSessionsSpawnTool({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
@@ -216,7 +219,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("rejects attachments for ACP runtime", async () => {
-    const tool = createSessionsSpawnTool({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       agentChannel: "discord",
       agentAccountId: "default",
@@ -240,7 +243,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it('rejects streamTo when runtime is not "acp"', async () => {
-    const tool = createSessionsSpawnTool({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
@@ -260,24 +263,74 @@ describe("sessions_spawn tool", () => {
   });
 
   it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {
-    const tool = createSessionsSpawnTool();
-    const schema = tool.parameters as {
-      properties?: {
-        attachments?: {
-          items?: {
-            properties?: {
-              content?: {
-                type?: string;
-                maxLength?: number;
+    const toolPromise = getSessionsSpawnTool();
+    return toolPromise.then((tool) => {
+      const schema = tool.parameters as {
+        properties?: {
+          attachments?: {
+            items?: {
+              properties?: {
+                content?: {
+                  type?: string;
+                  maxLength?: number;
+                };
               };
             };
           };
         };
       };
-    };
 
-    const contentSchema = schema.properties?.attachments?.items?.properties?.content;
-    expect(contentSchema?.type).toBe("string");
-    expect(contentSchema?.maxLength).toBeUndefined();
+      const contentSchema = schema.properties?.attachments?.items?.properties?.content;
+      expect(contentSchema?.type).toBe("string");
+      expect(contentSchema?.maxLength).toBeUndefined();
+    });
+  });
+
+  it("auto-forwards inbound media paths from the current message into subagent task text", async () => {
+    const inboundDir = path.join(os.homedir(), ".openclaw", "media", "inbound");
+    await fs.mkdir(inboundDir, { recursive: true });
+    const inboundFile = path.join(inboundDir, `sessions-spawn-test-${Date.now()}.xlsx`);
+    await fs.writeFile(inboundFile, "stub");
+
+    try {
+      const tool = await getSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        currentMessageText: `[media attached: ${inboundFile} (application/zip) | ${inboundFile}]\n更新数据库`,
+      });
+
+      await tool.execute("call-auto-attach", {
+        task: "处理和更新销售主题分析相关的数据库",
+        agentId: "jiuyan-data",
+      });
+
+      expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task: expect.stringContaining(inboundFile),
+        }),
+        expect.any(Object),
+      );
+    } finally {
+      await fs.rm(inboundFile, { force: true });
+    }
+  });
+
+  it("ignores media annotations outside the inbound attachment roots", async () => {
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      currentMessageText:
+        "[media attached: /tmp/not-allowed.xlsx (application/zip) | /tmp/not-allowed.xlsx]",
+    });
+
+    await tool.execute("call-no-auto-attach", {
+      task: "处理和更新销售主题分析相关的数据库",
+      agentId: "jiuyan-data",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "处理和更新销售主题分析相关的数据库",
+      }),
+      expect.any(Object),
+    );
   });
 });
