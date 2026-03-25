@@ -333,3 +333,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: gemini-image":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gemini-image/**"
