@@ -420,6 +420,7 @@ export async function handleFeishuMessage(params: {
       isDirectMessage: false,
       globalConfig: feishuCfg,
       groupConfig,
+      groupPolicy,
     }));
 
     if (requireMention && !ctx.mentionedBot) {
