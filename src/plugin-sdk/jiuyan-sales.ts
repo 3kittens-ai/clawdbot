@@ -119,6 +119,7 @@ export type SalesImportResult =
     };
 
 type QueryMetric =
+  | "record_count"
   | "total_qty"
   | "total_paid_amount"
   | "active_sku_count"
@@ -128,6 +129,7 @@ type QueryMetric =
 type QueryDimension = "province" | "city" | "platform" | "shop" | "product_category" | "sku";
 
 type QueryTimeRange =
+  | { kind: "all_time"; label: string }
   | { kind: "latest_day"; label: string }
   | { kind: "latest_minus_days"; days: number; label: string }
   | { kind: "last_n_days"; days: number; label: string }
@@ -290,6 +292,11 @@ type PythonJobCompletion<T> = {
 };
 
 const METRICS: Record<QueryMetric, MetricSpec> = {
+  record_count: {
+    sql: "COUNT(*)",
+    label: "记录数",
+    formatter: (value) => formatNumber(value, false),
+  },
   total_qty: {
     sql: "COALESCE(SUM(sales_volume), 0)",
     label: "销量",
@@ -325,8 +332,9 @@ const DIMENSIONS: Record<Exclude<QueryDimension, "sku">, DimensionSpec> = {
   product_category: { column: "product_category", label: "品类" },
 };
 
-const FORMULA_TRIGGER_RE =
+const LEGACY_FORMULA_TRIGGER_RE =
   /按照(?<formula>.+?)公式(?:计算|预测)(?:未来)?\s*(?<months>\d{1,2})\s*个?月.*?(?:top|前)\s*(?<topk>\d{1,4})\s*(?:个)?\s*sku.*销量/iu;
+const NATURAL_FORMULA_TRIGGER_RE = /^(?:用数据库中的数据使用)?公式(?:计算|预测)(?:销量)?/iu;
 
 function normalizeText(text: string): string {
   return text
@@ -667,17 +675,30 @@ export function findLatestPredictExcelPath(
 
 export function parseFormulaForecastRequest(content: string): FormulaForecastRequest | null {
   const normalized = normalizeFormulaRequestText(content);
-  const match = FORMULA_TRIGGER_RE.exec(normalized);
-  if (!match?.groups) {
-    return null;
+  const legacyMatch = LEGACY_FORMULA_TRIGGER_RE.exec(normalized);
+  let horizonMonths: number;
+  let topK: number;
+  let formulaText: string;
+
+  if (legacyMatch?.groups) {
+    horizonMonths = Number.parseInt(legacyMatch.groups.months, 10);
+    topK = Number.parseInt(legacyMatch.groups.topk, 10);
+    formulaText = legacyMatch.groups.formula.trim();
+  } else {
+    if (!NATURAL_FORMULA_TRIGGER_RE.test(normalized)) {
+      return null;
+    }
+    const monthsMatch = normalized.match(/未来\s*(\d{1,2})\s*个?月/u);
+    horizonMonths = Number.parseInt(monthsMatch?.[1] ?? "", 10);
+    if (!Number.isFinite(horizonMonths)) {
+      return null;
+    }
+    const topKMatch = normalized.match(/(?:top|前)\s*(\d{1,4})\s*(?:个)?\s*sku/iu);
+    topK = Number.parseInt(topKMatch?.[1] ?? "50", 10);
+    formulaText = inferNaturalLanguageFormulaText(normalized);
   }
-  const horizonMonths = Number.parseInt(match.groups.months, 10);
-  const topK = Number.parseInt(match.groups.topk, 10);
-  if (!Number.isFinite(horizonMonths) || !Number.isFinite(topK)) {
-    return null;
-  }
-  const formulaText = match.groups.formula.trim();
-  if (!formulaText) {
+
+  if (!Number.isFinite(horizonMonths) || !Number.isFinite(topK) || !formulaText) {
     return null;
   }
   return {
@@ -686,6 +707,25 @@ export function parseFormulaForecastRequest(content: string): FormulaForecastReq
     horizonMonths: Math.min(Math.max(horizonMonths, 1), 24),
     topK: Math.min(Math.max(topK, 1), 2000),
   };
+}
+
+function inferNaturalLanguageFormulaText(normalized: string): string {
+  const explicitWeightMatch = normalized.match(/各\s*(\d+(?:\.\d+)?)\s*的?权重/u);
+  if (/(环比|最近值)/u.test(normalized) && /(同比|去年同期|全年同比)/u.test(normalized)) {
+    const weight = Number.parseFloat(explicitWeightMatch?.[1] ?? "0.5");
+    if (Number.isFinite(weight) && weight >= 0 && weight <= 1) {
+      const otherWeight = Number((1 - weight).toFixed(6));
+      return `最近一个月销量*${weight} + m12*${otherWeight}`;
+    }
+    return "最近一个月销量*0.5 + m12*0.5";
+  }
+  if (/(同比|去年同期|全年同比)/u.test(normalized)) {
+    return "m12";
+  }
+  if (/(环比|最近值)/u.test(normalized)) {
+    return "最近一个月销量";
+  }
+  return "最近一个月销量";
 }
 
 export async function executeFormulaForecastJob(
@@ -1074,6 +1114,13 @@ function parseDimension(normalized: string): QueryDimension | undefined {
 }
 
 function parseMetric(normalized: string): QueryMetric | null {
+  if (
+    /(记录数|记录总数|总记录数|总共有多少条记录|多少条记录|多少条数据|数据条数|总条数|总行数|行数)/u.test(
+      normalized,
+    )
+  ) {
+    return "record_count";
+  }
   if (/(活跃).*(SKU|sku)/u.test(normalized)) {
     return "active_sku_count";
   }
@@ -1132,6 +1179,18 @@ function buildSalesDbQueryPlan(content: string): SalesDbQueryPlan | null {
   const normalized = normalizeText(content);
   if (shouldIgnoreSalesDbQuery(normalized)) {
     return null;
+  }
+  if (
+    /((数据库|sales).*(记录数|记录总数|总记录数|总共有多少条记录|多少条记录|多少条数据|数据条数|总条数|总行数|行数))|((记录数|记录总数|总记录数|总共有多少条记录|多少条记录|多少条数据|数据条数|总条数|总行数|行数).*(数据库|sales))/u.test(
+      normalized,
+    )
+  ) {
+    return {
+      normalized,
+      intent: "aggregate",
+      metric: "record_count",
+      timeRange: { kind: "all_time", label: "全部数据" },
+    };
   }
   if (
     /((数据库|sales).*(时间范围|数据范围|日期范围|起止|覆盖范围))|((时间范围|数据范围|日期范围).*(数据库|sales))/u.test(
@@ -1318,6 +1377,14 @@ function resolveTimeFilter(
   timeRange: QueryTimeRange,
 ): { clause: string; params: string[]; latestDate: string | null; resolvedRangeLabel: string } {
   const latestDate = readLatestDate(db);
+  if (timeRange.kind === "all_time") {
+    return {
+      clause: "1 = 1",
+      params: [],
+      latestDate,
+      resolvedRangeLabel: timeRange.label,
+    };
+  }
   if (!latestDate) {
     return { clause: "1 = 0", params: [], latestDate: null, resolvedRangeLabel: "无可用日期" };
   }
