@@ -123,6 +123,17 @@ describe("parseSalesDbQueryRequest", () => {
     });
   });
 
+  it("parses total record-count queries", () => {
+    expect(parseSalesDbQueryRequest("现在数据库总共有多少条记录")).toEqual({
+      kind: "aggregate",
+      metric: "record_count",
+      timeRange: { kind: "all_time", label: "全部数据" },
+      groupBy: undefined,
+      sortDirection: undefined,
+      limit: undefined,
+    });
+  });
+
   it("parses year aggregate queries", () => {
     expect(parseSalesDbQueryRequest("2025年的总销量是多少")).toEqual({
       kind: "aggregate",
@@ -217,6 +228,30 @@ describe("querySalesDbForTest", () => {
       kind: "date_range",
       minDate: "2026-03-21",
       maxDate: "2026-03-23",
+    });
+  });
+
+  it("returns total record count across the full database", () => {
+    const dbPath = createTempSalesDbForTest([
+      { saleDate: "2026-03-21", province: "浙江", salesVolume: 20 },
+      { saleDate: "2026-03-23", province: "广东", salesVolume: 10 },
+      { saleDate: "2026-03-23", province: "广东", salesVolume: 11 },
+    ]);
+    tempDbPaths.push(dbPath);
+
+    expect(
+      querySalesDbForTest(dbPath, {
+        kind: "aggregate",
+        metric: "record_count",
+        timeRange: { kind: "all_time", label: "全部数据" },
+      }),
+    ).toEqual({
+      kind: "aggregate",
+      metric: "record_count",
+      timeLabel: "全部数据",
+      resolvedRangeLabel: "全部数据",
+      latestDate: "2026-03-23",
+      rows: [{ label: "记录数", value: 3 }],
     });
   });
 
