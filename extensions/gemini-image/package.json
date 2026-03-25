@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/gemini-image",
+  "version": "2026.3.23",
+  "private": true,
+  "description": "OpenClaw Gemini image tool plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
