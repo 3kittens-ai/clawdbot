@@ -367,6 +367,8 @@ importers:
 
   extensions/firecrawl: {}
 
+  extensions/gemini-image: {}
+
   extensions/github-copilot: {}
 
   extensions/google: {}
