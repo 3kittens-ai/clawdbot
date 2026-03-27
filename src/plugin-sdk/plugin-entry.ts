@@ -86,6 +86,7 @@ export type {
   ProviderAuthResult,
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
+  OpenClawPluginToolContext,
   PluginLogger,
   PluginInteractiveTelegramHandlerContext,
 };
