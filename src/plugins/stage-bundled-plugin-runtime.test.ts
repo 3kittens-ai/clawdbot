@@ -262,7 +262,7 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
   });
 
-  it("copies shared runtime assets into dist and exposes them from dist-runtime", () => {
+  it("does not stage the jiuyan sales sqlite or its sidecar files into dist or dist-runtime", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-shared-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "feishu");
     const sharedDbPath = path.join(
@@ -274,10 +274,20 @@ describe("stageBundledPluginRuntime", () => {
       "data-base",
       "sales_filtered.sqlite",
     );
+    const sharedWalPath = path.join(
+      repoRoot,
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite-wal",
+    );
     fs.mkdirSync(path.dirname(sharedDbPath), { recursive: true });
     fs.mkdirSync(distPluginDir, { recursive: true });
     fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
     fs.writeFileSync(sharedDbPath, "db\n", "utf8");
+    fs.writeFileSync(sharedWalPath, "wal\n", "utf8");
 
     stageBundledPluginRuntime({ repoRoot });
 
@@ -301,11 +311,87 @@ describe("stageBundledPluginRuntime", () => {
       "data-base",
       "sales_filtered.sqlite",
     );
+    const distSharedWalPath = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite-wal",
+    );
+    const runtimeSharedWalPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite-wal",
+    );
 
-    expect(fs.existsSync(distSharedDbPath)).toBe(true);
-    expect(fs.readFileSync(distSharedDbPath, "utf8")).toBe("db\n");
-    expect(fs.lstatSync(runtimeSharedDbPath).isSymbolicLink()).toBe(true);
-    expect(fs.readFileSync(runtimeSharedDbPath, "utf8")).toBe("db\n");
+    expect(fs.existsSync(distSharedDbPath)).toBe(false);
+    expect(fs.existsSync(runtimeSharedDbPath)).toBe(false);
+    expect(fs.existsSync(distSharedWalPath)).toBe(false);
+    expect(fs.existsSync(runtimeSharedWalPath)).toBe(false);
+  });
+
+  it("removes existing staged jiuyan sales sqlite sidecar files when syncing shared runtime assets", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-shared-preserve-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "feishu");
+    const sharedDbPath = path.join(
+      repoRoot,
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite",
+    );
+    const distSharedDbPath = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite",
+    );
+    const sharedWalPath = path.join(
+      repoRoot,
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite-wal",
+    );
+    const distSharedWalPath = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "shared",
+      "jiuyan-sales",
+      "model-sales-jiuyan",
+      "data-base",
+      "sales_filtered.sqlite-wal",
+    );
+    fs.mkdirSync(path.dirname(sharedDbPath), { recursive: true });
+    fs.mkdirSync(path.dirname(distSharedDbPath), { recursive: true });
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
+    fs.writeFileSync(sharedDbPath, "source-db\n", "utf8");
+    fs.writeFileSync(sharedWalPath, "source-wal\n", "utf8");
+    fs.writeFileSync(distSharedDbPath, "runtime-db\n", "utf8");
+    fs.writeFileSync(distSharedWalPath, "runtime-wal\n", "utf8");
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    expect(fs.existsSync(distSharedDbPath)).toBe(false);
+    expect(fs.existsSync(distSharedWalPath)).toBe(false);
   });
 
   it("preserves package metadata needed for bundled plugin discovery from dist-runtime", () => {

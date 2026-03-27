@@ -1,15 +1,6 @@
 {
-  "originHash" : "1c9c9d251b760ed3234ecff741a88eb4bf42315ad6f50ac7392b187cf226c16c",
+  "originHash" : "c29abc69178f549d04c6bd2156ff24caa4c15387f02b5d1ab5b7848b753d6098",
   "pins" : [
-    {
-      "identity" : "axorcist",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/steipete/AXorcist.git",
-      "state" : {
-        "revision" : "c75d06f7f93e264a9786edc2b78c04973061cb2f",
-        "version" : "0.1.0"
-      }
-    },
     {
       "identity" : "commander",
       "kind" : "remoteSourceControl",
@@ -38,30 +29,12 @@
       }
     },
     {
-      "identity" : "peekaboo",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/steipete/Peekaboo.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "bace59f90bb276f1c6fb613acfda3935ec4a7a90"
-      }
-    },
-    {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
       "state" : {
         "revision" : "21d8df80440b1ca3b65fa82e40782f1e5a9e6ba2",
         "version" : "2.9.0"
-      }
-    },
-    {
-      "identity" : "swift-algorithms",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-algorithms",
-      "state" : {
-        "revision" : "87e50f483c54e6efd60e885f7f5aa946cee68023",
-        "version" : "1.2.1"
       }
     },
     {
@@ -80,15 +53,6 @@
       "state" : {
         "revision" : "bbd81b6725ae874c69e9b8c8804d462356b55523",
         "version" : "1.10.1"
-      }
-    },
-    {
-      "identity" : "swift-numerics",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-numerics.git",
-      "state" : {
-        "revision" : "0c0290ff6b24942dadb83a929ffaaa1481df04a2",
-        "version" : "1.1.1"
       }
     },
     {

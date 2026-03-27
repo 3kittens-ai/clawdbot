@@ -38,6 +38,55 @@ function symlinkPath(sourcePath, targetPath, type) {
   ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
 }
 
+function shouldPreserveExistingSharedRuntimeFile(sourcePath, targetPath) {
+  return path.extname(sourcePath) === ".sqlite" && fs.existsSync(targetPath);
+}
+
+function shouldSkipSharedRuntimeFile(sourcePath) {
+  const normalizedSourcePath = sourcePath.replace(/\\/g, "/");
+  if (!normalizedSourcePath.includes("/jiuyan-sales/model-sales-jiuyan/data-base/")) {
+    return false;
+  }
+
+  const baseName = path.basename(normalizedSourcePath);
+  return baseName === "sales_filtered.sqlite" || baseName.startsWith("sales_filtered.sqlite");
+}
+
+function syncSharedRuntimeAssetsRecursive(sourceDir, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  for (const dirent of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, dirent.name);
+    const targetPath = path.join(targetDir, dirent.name);
+
+    if (dirent.isDirectory()) {
+      syncSharedRuntimeAssetsRecursive(sourcePath, targetPath);
+      continue;
+    }
+
+    if (dirent.isSymbolicLink()) {
+      ensureSymlink(fs.readlinkSync(sourcePath), targetPath);
+      continue;
+    }
+
+    if (!dirent.isFile()) {
+      continue;
+    }
+
+    if (shouldSkipSharedRuntimeFile(sourcePath)) {
+      removePathIfExists(targetPath);
+      continue;
+    }
+
+    if (shouldPreserveExistingSharedRuntimeFile(sourcePath, targetPath)) {
+      continue;
+    }
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.copyFileSync(sourcePath, targetPath);
+  }
+}
+
 function shouldWrapRuntimeJsFile(sourcePath) {
   return path.extname(sourcePath) === ".js";
 }
@@ -111,16 +160,13 @@ function syncSharedRuntimeAssets(repoRoot, distExtensionsRoot) {
   const sourceSharedDir = path.join(repoRoot, "extensions", "shared");
   const distSharedDir = path.join(distExtensionsRoot, "shared");
 
-  removePathIfExists(distSharedDir);
   if (!fs.existsSync(sourceSharedDir)) {
     return;
   }
 
   // Shared runtime assets are consumed directly by bundled channels from dist.
-  fs.cpSync(sourceSharedDir, distSharedDir, {
-    recursive: true,
-    dereference: false,
-  });
+  // Preserve mutable runtime databases that may have been updated in place.
+  syncSharedRuntimeAssetsRecursive(sourceSharedDir, distSharedDir);
 }
 
 function linkPluginNodeModules(params) {

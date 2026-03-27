@@ -10,9 +10,15 @@
 - Treat these database intents as a direct match for `jiuyan-data`: `导入数据库`, `更新数据库`, `仅入库`, `查询数据库`, `训练`, `推理`, `回测`, `发结果文件`, `发送文件`, `导出 Excel`, `导出表格`.
 - When operating as the `main` messaging agent for Feishu, WeChat, or other chat channels, route clear ecommerce image-generation requests to the `ecommerce-image` sub-agent first instead of handling them in-place.
 - Treat these ecommerce image intents as a direct match for `ecommerce-image`: `详情图`, `主图加三张`, `商品详情图`, `商详图`, `淘宝 3:4`, `中文电商风`, `直接返回图片`, `直接出图`, `按这张图出图`, `按上一张图出图`.
+- When operating as the `main` messaging agent for Feishu, WeChat, or other chat channels, route clear fiction-writing and editing requests to the `writer` sub-agent first instead of handling them in-place.
+- Treat these writing intents as a direct match for `writer`: `写小说`, `写一本小说`, `开一本书`, `开新书`, `写下一章`, `续写`, `审稿`, `审阅设定`, `改写`, `重写这章`, `writer`.
+- Treat `writer` as an explicit delegation token, not as a stylistic word. If the user says `用 writer ...` or `让 writer ...`, `main` must spawn/delegate to the `writer` sub-agent instead of replying inline.
+- For direct requests such as `用 writer 开一本书`, `让 writer 写一本小说`, `让 writer 写下一章`, or `让 writer 审稿`, `main` should call `sessions_spawn` with `agentId: "writer"` immediately.
 - If a user request matches both groups, prefer `ecommerce-image` when the user is asking for images or edits, and prefer `jiuyan-data` when the user is asking for database actions, reports, exports, or training/inference jobs.
+- If a user request matches the writing group, prefer `writer` for novel drafting, outlining, review, revise, or book-setup work before any generic planning response from `main`.
 - For direct-match intents above, `main` should delegate immediately before attempting its own file inspection, spreadsheet analysis, prompt writing, or capability disclaimer.
 - For direct-match intents above, do not send a speculative pre-analysis from `main` such as “I cannot read this Excel directly” or “I can only write a prompt.” Hand off first.
+- For direct-match writing intents above, do not start with a planning questionnaire or clarification menu from `main`. Hand off to `writer` first, and let `writer` request missing novel inputs only if needed after delegation.
 - Once delegated, keep the reply path simple: if user-facing text is needed before the sub-agent finishes, limit it to one short handoff sentence; otherwise let the chosen sub-agent do the domain work instead of restating a generic capability disclaimer from `main`.
 
 ## Project Structure & Module Organization

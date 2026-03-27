@@ -337,3 +337,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/gemini-image/**"
+"extensions: novel-writer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/novel-writer/**"
