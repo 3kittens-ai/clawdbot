@@ -219,8 +219,7 @@ actor VoiceWakeRuntime {
 
             let preferred = config.micID?.isEmpty == false ? config.micID! : "system-default"
             self.logger.info(
-                "voicewake runtime input preferred=\(preferred, privacy: .public) " +
-                    "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
+                "voicewake runtime input preferred=\(preferred, privacy: .public) \(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
             self.logger.info("voicewake runtime started")
             DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "started", fields: [
                 "locale": config.localeID ?? "",
@@ -410,10 +409,7 @@ actor VoiceWakeRuntime {
         }.joined(separator: ", ")
 
         self.logger.debug(
-            "voicewake runtime transcript='\(transcript, privacy: .private)' textOnly=\(summary.textOnly) " +
-                "isFinal=\(isFinal) timing=\(summary.timingCount)/\(segments.count) " +
-                "capturing=\(capturing) fallback=\(usedFallback) " +
-                "\(matchSummary) segments=[\(segmentSummary, privacy: .private)]")
+            "voicewake runtime transcript='\(transcript, privacy: .private)' textOnly=\(summary.textOnly) isFinal=\(isFinal) timing=\(summary.timingCount)/\(segments.count) capturing=\(capturing) fallback=\(usedFallback) \(matchSummary) segments=[\(segmentSummary, privacy: .private)]")
     }
 
     private func noteAudioTap(rms: Double) {
@@ -424,8 +420,7 @@ actor VoiceWakeRuntime {
         self.lastTapLogAt = now
         let db = 20 * log10(max(rms, 1e-7))
         self.logger.debug(
-            "voicewake runtime audio tap rms=\(String(format: "%.6f", rms)) " +
-                "db=\(String(format: "%.1f", db)) capturing=\(self.isCapturing)")
+            "voicewake runtime audio tap rms=\(String(format: "%.6f", rms)) db=\(String(format: "%.1f", db)) capturing=\(self.isCapturing)")
     }
 
     private func noteRecognitionCallback(transcript: String?, isFinal: Bool, error: Error?) {

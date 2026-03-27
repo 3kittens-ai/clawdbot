@@ -220,6 +220,29 @@ function resolveSpawnMode(params: {
   return params.threadRequested ? "session" : "run";
 }
 
+function shouldDowngradeFeishuGroupThreadSession(params: {
+  channel?: string;
+  to?: string;
+  threadId?: string | number;
+  threadRequested: boolean;
+  spawnMode: SpawnSubagentMode;
+}): boolean {
+  if (!params.threadRequested || params.spawnMode !== "session") {
+    return false;
+  }
+  if (params.channel?.trim().toLowerCase() !== "feishu") {
+    return false;
+  }
+  if (params.threadId != null && String(params.threadId).trim() !== "") {
+    return false;
+  }
+  return /^chat:/i.test(params.to?.trim() ?? "");
+}
+
+export const __testing = {
+  shouldDowngradeFeishuGroupThreadSession,
+};
+
 function summarizeError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
@@ -311,12 +334,24 @@ export async function spawnSubagentDirect(
   }
   const modelOverride = params.model;
   const thinkingOverrideRaw = params.thinking;
-  const requestThreadBinding = params.thread === true;
+  let requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const spawnMode = resolveSpawnMode({
+  let spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
   });
+  if (
+    shouldDowngradeFeishuGroupThreadSession({
+      channel: ctx.agentChannel,
+      to: ctx.agentTo,
+      threadId: ctx.agentThreadId,
+      threadRequested: requestThreadBinding,
+      spawnMode,
+    })
+  ) {
+    spawnMode = "run";
+    requestThreadBinding = false;
+  }
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",

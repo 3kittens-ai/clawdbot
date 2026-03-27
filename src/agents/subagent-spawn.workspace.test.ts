@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { __testing as subagentSpawnTesting } from "./subagent-spawn.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -268,5 +269,33 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       deleteTranscript: true,
       emitLifecycleHooks: true,
     });
+  });
+
+  it("downgrades Feishu plain group thread session requests", () => {
+    expect(
+      subagentSpawnTesting.shouldDowngradeFeishuGroupThreadSession({
+        channel: "feishu",
+        to: "chat:oc_group_chat",
+        threadRequested: true,
+        spawnMode: "session",
+      }),
+    ).toBe(true);
+    expect(
+      subagentSpawnTesting.shouldDowngradeFeishuGroupThreadSession({
+        channel: "feishu",
+        to: "user:ou_sender_1",
+        threadRequested: true,
+        spawnMode: "session",
+      }),
+    ).toBe(false);
+    expect(
+      subagentSpawnTesting.shouldDowngradeFeishuGroupThreadSession({
+        channel: "feishu",
+        to: "chat:oc_group_chat",
+        threadId: "om_topic_root",
+        threadRequested: true,
+        spawnMode: "session",
+      }),
+    ).toBe(false);
   });
 });

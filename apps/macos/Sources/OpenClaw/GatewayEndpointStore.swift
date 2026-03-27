@@ -219,8 +219,7 @@ actor GatewayEndpointStore {
         }
         guard shouldWarn else { return }
         Self.staticLogger.warning(
-            "\(envVar, privacy: .public) is set and overrides \(configKey, privacy: .public). " +
-                "If this is unintentional, clear it with: launchctl unsetenv \(envVar, privacy: .public)")
+            "\(envVar, privacy: .public) is set and overrides \(configKey, privacy: .public). If this is unintentional, clear it with: launchctl unsetenv \(envVar, privacy: .public)")
     }
 
     private let deps: Deps

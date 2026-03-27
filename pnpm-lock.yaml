@@ -517,6 +517,8 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/novel-writer: {}
+
   extensions/nvidia: {}
 
   extensions/ollama: {}
