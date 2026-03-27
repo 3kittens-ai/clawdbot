@@ -2244,6 +2244,89 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "novel-writer",
+    idHint: "novel-writer",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/novel-writer",
+    packageVersion: "2026.3.24",
+    packageDescription: "OpenClaw Gemini novel writer tool plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "novel-writer",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          model: {
+            type: "string",
+          },
+          language: {
+            type: "string",
+          },
+          genre: {
+            type: "string",
+          },
+          thinking: {
+            type: "string",
+          },
+          maxTokens: {
+            type: "number",
+            minimum: 1,
+          },
+          timeoutMs: {
+            type: "number",
+            minimum: 1,
+          },
+          save: {
+            type: "boolean",
+          },
+          fileName: {
+            type: "string",
+          },
+        },
+      },
+      uiHints: {
+        model: {
+          label: "Novel Writer Model",
+          help: "Gemini text model used for fiction generation.",
+        },
+        language: {
+          label: "Default Language",
+          help: "Default novel output language, for example zh-CN or en-US.",
+        },
+        genre: {
+          label: "Default Genre",
+          help: "Optional default fiction genre profile, for example urban_female, scifi_hard, or ancient_romance.",
+        },
+        thinking: {
+          label: "Default Thinking",
+          help: "Optional default thinking level for long-form writing.",
+        },
+        maxTokens: {
+          label: "Default Max Tokens",
+          help: "Optional max output token cap for novel generation.",
+        },
+        timeoutMs: {
+          label: "Timeout Ms",
+          help: "Optional timeout for novel generation requests.",
+        },
+        save: {
+          label: "Save Output",
+          help: "Save generated novel text into the current agent workspace by default.",
+        },
+        fileName: {
+          label: "Output File Name",
+          help: "Optional output filename for the saved markdown draft.",
+        },
+      },
+    },
+  },
+  {
     dirName: "nvidia",
     idHint: "nvidia",
     source: {

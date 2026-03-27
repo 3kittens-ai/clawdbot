@@ -30,6 +30,13 @@ describe("parseForecastingWorkflowRequest", () => {
     });
   });
 
+  it("parses plain predict file requests without latest wording", () => {
+    expect(parseForecastingWorkflowRequest("发我销量预测文件")).toEqual({
+      action: "latest_predict",
+      label: "最新生产推理结果",
+    });
+  });
+
   it("ignores unrelated messages", () => {
     expect(parseForecastingWorkflowRequest("最新销量数据是哪天的")).toBeNull();
   });

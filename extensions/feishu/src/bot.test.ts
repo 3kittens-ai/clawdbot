@@ -30,6 +30,7 @@ const {
   mockMaybeHandleForecastingWorkflow,
   mockMaybeHandleFormulaForecastWorkflow,
   mockMaybeHandleSalesImportWorkflow,
+  mockMaybeHandleScheduleWorkbookWorkflow,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -67,6 +68,7 @@ const {
   mockMaybeHandleForecastingWorkflow: vi.fn(async () => false),
   mockMaybeHandleFormulaForecastWorkflow: vi.fn(async () => false),
   mockMaybeHandleSalesImportWorkflow: vi.fn(async () => false),
+  mockMaybeHandleScheduleWorkbookWorkflow: vi.fn(async () => false),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -124,6 +126,10 @@ vi.mock("./sales-import-workflow.js", () => ({
   maybeHandleSalesImportWorkflow: mockMaybeHandleSalesImportWorkflow,
 }));
 
+vi.mock("./schedule-workbook-workflow.js", () => ({
+  maybeHandleScheduleWorkbookWorkflow: mockMaybeHandleScheduleWorkbookWorkflow,
+}));
+
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
   const runtime = createRuntimeEnv();
   await handleFeishuMessage({
@@ -140,6 +146,7 @@ describe("handleFeishuMessage ACP routing", () => {
     mockMaybeHandleForecastingWorkflow.mockReset().mockResolvedValue(false);
     mockMaybeHandleFormulaForecastWorkflow.mockReset().mockResolvedValue(false);
     mockMaybeHandleSalesImportWorkflow.mockReset().mockResolvedValue(false);
+    mockMaybeHandleScheduleWorkbookWorkflow.mockReset().mockResolvedValue(false);
     mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
       ({ route }) =>
         ({
@@ -710,6 +717,101 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("forces clear database query workflow intents to the jiuyan-data session in Feishu groups", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          groupPolicy: "open",
+          groupAllowFrom: ["oc_group_chat"],
+          groups: {
+            oc_group_chat: {
+              allow: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-attacker",
+        },
+      },
+      message: {
+        message_id: "msg-force-jiuyan-data",
+        chat_id: "oc_group_chat",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "查询数据库" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SessionKey: "agent:jiuyan-data:feishu:group:oc_group_chat",
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not force sales import intents to the generic jiuyan-data route in Feishu groups", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockMaybeHandleSalesImportWorkflow.mockResolvedValueOnce(false);
+
+    const cfg: ClawdbotConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          groupPolicy: "open",
+          groupAllowFrom: ["oc_group_chat"],
+          groups: {
+            oc_group_chat: {
+              allow: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-attacker",
+        },
+      },
+      message: {
+        message_id: "msg-sales-import-stays-main",
+        chat_id: "oc_group_chat",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "更新数据库" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockMaybeHandleSalesImportWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "更新数据库",
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SessionKey: "agent:main:feishu:dm:ou-attacker",
+      }),
+    );
+  });
+
   it("skips sender-name lookup when resolveSenderNames is false", async () => {
     const cfg: ClawdbotConfig = {
       channels: {
@@ -846,6 +948,234 @@ describe("handleFeishuMessage command authorization", () => {
         messageId: "om_parent_excel",
         fileKey: "file_key_excel",
         type: "file",
+      }),
+    );
+  });
+
+  it("passes quoted excel attachments into the sales import workflow for 更新数据库", async () => {
+    mockMaybeHandleSalesImportWorkflow.mockResolvedValueOnce(true);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_excel_update",
+      chatId: "oc-dm",
+      content: "[File: 销售订单.xlsx]",
+      rawContent: JSON.stringify({
+        file_key: "file_key_excel_update",
+        file_name: "销售订单.xlsx",
+      }),
+      contentType: "file",
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("xlsx"),
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      fileName: "销售订单.xlsx",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_import_update",
+        parent_id: "om_parent_excel_update",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "更新数据库" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockMaybeHandleSalesImportWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "更新数据库",
+        mediaList: expect.arrayContaining([
+          expect.objectContaining({
+            fileName: "销售订单.xlsx",
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("passes quoted excel attachments into the formula forecast workflow", async () => {
+    mockMaybeHandleFormulaForecastWorkflow.mockResolvedValueOnce(true);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_formula_excel",
+      chatId: "oc-dm",
+      content: "[File: 选品SKU.xlsx]",
+      rawContent: JSON.stringify({
+        file_key: "file_key_formula_excel",
+        file_name: "选品SKU.xlsx",
+      }),
+      contentType: "file",
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("xlsx"),
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      fileName: "选品SKU.xlsx",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_formula",
+        parent_id: "om_parent_formula_excel",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "公式计算销量 文件中的 sku" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockMaybeHandleFormulaForecastWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "公式计算销量 文件中的 sku",
+        mediaList: expect.arrayContaining([
+          expect.objectContaining({
+            fileName: "选品SKU.xlsx",
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("passes quoted excel attachments into the formula forecast workflow for 表中的 SKU", async () => {
+    mockMaybeHandleFormulaForecastWorkflow.mockResolvedValueOnce(true);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_formula_table_excel",
+      chatId: "oc-dm",
+      content: "[File: 20260324计划排单表-常规鱼钩.xlsx]",
+      rawContent: JSON.stringify({
+        file_key: "file_key_formula_table_excel",
+        file_name: "20260324计划排单表-常规鱼钩.xlsx",
+      }),
+      contentType: "file",
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("xlsx"),
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      fileName: "20260324计划排单表-常规鱼钩.xlsx",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_formula_table",
+        parent_id: "om_parent_formula_table_excel",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "公式计算销量 表中的 SKU" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockMaybeHandleFormulaForecastWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "公式计算销量 表中的 SKU",
+        mediaList: expect.arrayContaining([
+          expect.objectContaining({
+            fileName: "20260324计划排单表-常规鱼钩.xlsx",
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("passes quoted excel attachments into the formula forecast workflow for 表中的是 sku", async () => {
+    mockMaybeHandleFormulaForecastWorkflow.mockResolvedValueOnce(true);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_formula_table_colloquial_excel",
+      chatId: "oc-dm",
+      content: "[File: 20260324计划排单表-常规鱼钩.xlsx]",
+      rawContent: JSON.stringify({
+        file_key: "file_key_formula_table_colloquial_excel",
+        file_name: "20260324计划排单表-常规鱼钩.xlsx",
+      }),
+      contentType: "file",
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("xlsx"),
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      fileName: "20260324计划排单表-常规鱼钩.xlsx",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_formula_table_colloquial",
+        parent_id: "om_parent_formula_table_colloquial_excel",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "公式预测销量 表中的是 sku" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockMaybeHandleFormulaForecastWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "公式预测销量 表中的是 sku",
+        mediaList: expect.arrayContaining([
+          expect.objectContaining({
+            fileName: "20260324计划排单表-常规鱼钩.xlsx",
+          }),
+        ]),
       }),
     );
   });

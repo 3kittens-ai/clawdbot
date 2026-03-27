@@ -9,6 +9,7 @@ describe("parseSalesImportRequest", () => {
   it("parses sales import requests", () => {
     expect(parseSalesImportRequest("请把这个 Excel 导入数据库")).toBe(true);
     expect(parseSalesImportRequest("回复这个 xlsx，入库到 sales")).toBe(true);
+    expect(parseSalesImportRequest("更新数据库")).toBe(true);
   });
 
   it("ignores unrelated messages", () => {

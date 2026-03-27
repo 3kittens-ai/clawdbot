@@ -3,6 +3,7 @@ import {
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { buildAgentMainSessionKey, buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
@@ -48,6 +49,7 @@ import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { maybeHandleSalesDbQueryWorkflow } from "./sales-db-query-workflow.js";
 import { maybeHandleSalesImportWorkflow } from "./sales-import-workflow.js";
+import { maybeHandleScheduleWorkbookWorkflow } from "./schedule-workbook-workflow.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import type { FeishuMessageContext } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -125,6 +127,11 @@ export function buildBroadcastSessionKey(
     return `agent:${targetAgentId}:${baseSessionKey.slice(prefix.length)}`;
   }
   return baseSessionKey;
+}
+
+function isFeishuJiuyanDataIntent(content: string): boolean {
+  const normalized = content.replace(/\s+/gu, "").toLowerCase();
+  return /(查询数据库|回测|发结果文件|发送文件|导出excel|导出表格|训练|推理)/u.test(normalized);
 }
 
 /**
@@ -653,6 +660,37 @@ export async function handleFeishuMessage(params: {
       }
     }
 
+    if (route.agentId === "main" && isFeishuJiuyanDataIntent(ctx.content)) {
+      const forcedAgentId = "jiuyan-data";
+      const forcedSessionKey = buildAgentSessionKey({
+        agentId: forcedAgentId,
+        channel: "feishu",
+        accountId: route.accountId,
+        peer: {
+          kind: isGroup ? "group" : "direct",
+          id: peerId,
+        },
+      });
+      const forcedMainSessionKey = buildAgentMainSessionKey({
+        agentId: forcedAgentId,
+        mainKey: cfg.session?.mainKey,
+      });
+      route = {
+        ...route,
+        agentId: forcedAgentId,
+        sessionKey: forcedSessionKey,
+        mainSessionKey: forcedMainSessionKey,
+        lastRoutePolicy: deriveLastRoutePolicy({
+          sessionKey: forcedSessionKey,
+          mainSessionKey: forcedMainSessionKey,
+        }),
+        matchedBy: "default",
+      };
+      log(
+        `feishu[${account.accountId}]: forcing database workflow route to ${forcedAgentId} (session=${forcedSessionKey})`,
+      );
+    }
+
     const preview = ctx.content.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isGroup
       ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
@@ -711,6 +749,22 @@ export async function handleFeishuMessage(params: {
     const mediaPayload = buildAgentMediaPayload(combinedMediaList);
 
     if (
+      await maybeHandleScheduleWorkbookWorkflow({
+        cfg,
+        accountId: account.accountId,
+        chatId: ctx.chatId,
+        senderOpenId: ctx.senderOpenId,
+        messageId: ctx.messageId,
+        content: ctx.content,
+        isGroup,
+        mentionedBot: ctx.mentionedBot,
+        log,
+      })
+    ) {
+      return;
+    }
+
+    if (
       await maybeHandleSalesImportWorkflow({
         cfg,
         accountId: account.accountId,
@@ -752,6 +806,7 @@ export async function handleFeishuMessage(params: {
         content: ctx.content,
         isGroup,
         mentionedBot: ctx.mentionedBot,
+        mediaList: combinedMediaList,
         log,
       })
     ) {

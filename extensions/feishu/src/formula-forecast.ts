@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/jiuyan-sales";
 import { sendMediaFeishu } from "./media.js";
 import { sendMessageFeishu } from "./send.js";
+import type { FeishuMediaInfo } from "./types.js";
 
 export type FormulaForecastContext = {
   cfg: ClawdbotConfig;
@@ -20,6 +21,7 @@ export type FormulaForecastContext = {
   content: string;
   isGroup: boolean;
   mentionedBot: boolean;
+  mediaList?: FeishuMediaInfo[];
   log?: (msg: string) => void;
 };
 
@@ -62,6 +64,7 @@ export async function maybeHandleFormulaForecastWorkflow(
 ): Promise<boolean> {
   return await handleJiuyanFormulaForecastMessage({
     content: ctx.content,
+    attachments: ctx.mediaList,
     adapter: {
       sendText: (text) => sendWorkflowReply(ctx, text),
       sendFile: ({ path: filePath, fileName }) =>
