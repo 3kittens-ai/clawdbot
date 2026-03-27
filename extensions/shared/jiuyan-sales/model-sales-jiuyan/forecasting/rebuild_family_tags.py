@@ -12,7 +12,7 @@ from typing import Iterable
 from forecasting.config import BASE_DIR, DB_PATH, OUTPUT_DIR
 
 
-MAX_FAMILY_SEGMENTS = 4
+MAX_FAMILY_SEGMENTS = 5
 FAMILIES_DOC_PATH = Path(BASE_DIR) / "docs" / "families.md"
 CHANGES_CSV_PATH = Path(OUTPUT_DIR) / "family_rebuild_changes.csv"
 SUMMARY_CSV_PATH = Path(OUTPUT_DIR) / "family_rebuild_summary.csv"
@@ -87,6 +87,17 @@ def has_any(text: str, patterns: Iterable[str]) -> bool:
     return any(pattern in text for pattern in patterns)
 
 
+def detect_length(name: str) -> str | None:
+    """提取长度信息，如 3.6米, 10米。"""
+    match = re.search(r"(\d+(\.\d+)?)米", name)
+    if match:
+        return match.group(0)
+    match = re.search(r"(\d+(\.\d+)?)m", name, re.IGNORECASE)
+    if match:
+        return f"{match.group(1)}米"
+    return None
+
+
 def first_match(text: str, rules: list[tuple[str, tuple[str, ...]]]) -> str | None:
     for label, patterns in rules:
         if has_any(text, patterns):
@@ -125,106 +136,94 @@ def build_line_group_family(name: str) -> str:
     core = first_match(name, LINE_CORE_RULES) or "通用"
     append_unique(tokens, core)
 
+    modifiers: list[str] = []
+
     if core == "七星漂":
-        modifiers: list[str] = []
         if has_any(name, ("铜头", "朝天钩")):
             modifiers.append("铜头朝天钩")
         elif "八字环" in name:
             modifiers.append("八字环")
-        elif "全无结" in name:
-            modifiers.append("全无结")
         hook = detect_hook(name)
         if hook and hook not in {"朝天钩"}:
             modifiers.append(hook)
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
 
-    if core == "黑坑":
-        modifiers: list[str] = []
-        if "全无结" in name:
-            modifiers.append("全无结")
+    elif core == "黑坑":
         for tag in ("偷驴", "飞磕", "正钓", "竞技"):
             if tag in name:
                 modifiers.append(tag)
                 break
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
 
-    if core == "鲢鳙":
-        modifiers = ["活铅" if "活铅" in name else "普通"]
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
+    elif core == "鲢鳙":
+        modifiers.append("活铅" if "活铅" in name else "普通")
 
-    if core == "罗非":
-        modifiers = []
+    elif core == "罗非":
         if "高速八字环" in name:
             modifiers.append("高速八字环")
         elif "八字环" in name:
             modifiers.append("八字环")
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
 
-    if core == "巨物":
-        modifiers = []
+    elif core == "巨物":
         if "成品滑漂" in name:
             modifiers.append("成品滑漂")
         if "PE" in name:
             modifiers.append("PE")
         elif "防爆" in name:
             modifiers.append("防爆")
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
 
-    if core == "双无结":
-        modifiers = ["GT"] if "GT" in name else []
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
+    elif core == "双无结":
+        if "GT" in name:
+            modifiers.append("GT")
 
-    if core == "全飞铅":
-        modifiers = ["翘草鳊"] if "翘草鳊" in name else []
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
+    elif core == "全飞铅":
+        if "翘草鳊" in name:
+            modifiers.append("翘草鳊")
 
-    if core == "全无结":
-        modifiers = ["鲫鱼" if "鲫鱼" in name else "通用"]
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
+    elif core == "全无结":
+        if "鲫鱼" in name:
+            modifiers.append("鲫鱼")
 
-    if core == "岩顶":
-        modifiers = ["原丝"] if "原丝" in name else []
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
-
-    if core == "溪流":
-        modifiers = ["灵敏"] if "灵敏" in name else []
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
-
-    if core == "草鱼":
-        modifiers = []
+    elif core == "草鱼":
         if "单钩" in name:
             modifiers.append("单钩")
         if "通线" in name:
             modifiers.append("通线")
         elif "子线组" in name:
             modifiers.append("子线")
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
 
-    if core == "子线夹":
-        modifiers = []
+    elif core in {"子线夹", "强力"}:
         if "PE双芯" in name or "极配" in name:
             modifiers.append("PE双芯极配")
         elif "PE加固" in name:
             modifiers.append("PE加固")
         elif "大力马" in name:
             modifiers.append("大力马")
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
+        if core == "强力":
+            if "防爆" in name:
+                modifiers.append("防爆")
+            if "飞磕" in name:
+                modifiers.append("飞磕")
 
-    if core == "强力":
-        modifiers = []
-        if "PE双芯" in name or "极配" in name:
-            modifiers.append("PE双芯极配")
-        elif "PE加固" in name:
-            modifiers.append("PE加固")
-        elif "大力马" in name:
-            modifiers.append("大力马")
-        elif "防爆" in name:
-            modifiers.append("防爆")
-        if "飞磕" in name:
-            modifiers.append("飞磕")
-        return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
+    # 公共优先级修饰符处理
+    priority_rules = [
+        ("全无结", ("全无结",)),
+        ("尤尼吉可", ("尤尼吉可",)),
+        ("珠珠", ("珠珠",)),
+        ("细地", ("JP细地", "细地")),
+        ("强硬锋", ("强硬锋",)),
+        ("有刺", ("有刺",)),
+        ("无刺", ("无刺",)),
+    ]
+    for label, patterns in priority_rules:
+        if label == "全无结" and core == "全无结":
+            continue
+        if has_any(name, patterns):
+            modifiers.append(label)
 
-    return "|".join(cleanup_tokens(tokens))
+    # 兜底：如果没有任何修饰符且 core 为通用/全无结，添加通用标签
+    if not modifiers and core in {"通用", "全无结"}:
+        modifiers.append("通用")
+
+    return "|".join(cleanup_tokens(extend_priority(tokens, modifiers)))
 
 
 def build_no_knot_family(name: str) -> str:
@@ -315,6 +314,7 @@ def build_hook_family(name: str) -> str:
         ("JP细地", ("JP细地",)),
         ("细地", ("细地",)),
         ("强硬锋", ("强硬锋",)),
+        ("碳芯", ("碳芯",)),
         ("弹簧", ("弹簧",)),
         ("跑铅", ("跑铅",)),
         ("加长子线", ("加长子线",)),
@@ -323,6 +323,8 @@ def build_hook_family(name: str) -> str:
         ("飞磕", ("飞磕",)),
         ("正钓", ("正钓",)),
         ("竞技", ("竞技",)),
+        ("有刺", ("有刺",)),
+        ("无刺", ("无刺",)),
     ]
 
     for label, patterns in priority_rules:

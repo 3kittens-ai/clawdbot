@@ -1,9 +1,9 @@
 # 数据库摘要 (Database Summary)
 
-- **统计日期：** 2026-03-19
+- **统计日期：** 2026-03-27
 - **当前数据库：** [sqlite/sales_filtered.sqlite](file:///Users/andychan/Documents/GitHub/data-jiuyan/data-base/sales_filtered.sqlite)
-- **总数据条数：** **15,115,831 条**
-- **时间范围：** 2021-03-09 至 2026-02-28
+- **总数据条数：** **15,324,850 条**
+- **时间范围：** 2021-03-09 至 2026-03-26
 
 ---
 
@@ -62,7 +62,7 @@
 
 - **表名：** `dim_sku`
 - **总 SKU 数：** **4,097 个**
-- **字段包含：** 商品编码 (PK), 商品名称, 产品分类, 市场吊牌价, 基本售价, 首次/最近出现日期, 以及结构化规格字段 (`spec_length`, `spec_size`, `spec_hook`, `spec_qty`)。
+- **字段包含：** 商品编码 (PK), 商品名称, 产品分类, 市场吊牌价, 基本售价, 首次/最近出现日期, 以及结构化规格字段 (`spec_length`, `spec_size`, `spec_hook`, `spec_qty`), **最新可用库存 (`latest_inventory`) 和采购在途 (`latest_in_transit`)**。
 - **关联表：** `sku_tags` (存储商品的所有分类标签，如钩型、材质、适用场景等)。
 - **更新逻辑：** 提取 `sales` 表最新非空元数据，并通过正则解析商品名称获取规格和标签。
 
@@ -81,4 +81,4 @@
 ### 6. 查询详情
 
 - **查询逻辑：** 基于 `data-base/sales_filtered.sqlite` 的 `sales` 和 `dim_sku` 表进行统计。
-- **最近更新：** 2026-03-19 00:07
+- **最近更新：** 2026-03-27 (SKU Metadata Rebuild)

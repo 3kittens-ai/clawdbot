@@ -1,8 +1,37 @@
 import os
 
+def resolve_db_path() -> str:
+    env_override = os.environ.get("OPENCLAW_JIUYAN_SALES_DB_PATH")
+    if env_override:
+        return env_override
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    direct_path = os.path.join(base_dir, 'data-base', 'sales_filtered.sqlite')
+    if os.path.exists(direct_path):
+        return direct_path
+
+    current = base_dir
+    for _ in range(8):
+        candidate = os.path.join(
+            current,
+            'extensions',
+            'shared',
+            'jiuyan-sales',
+            'model-sales-jiuyan',
+            'data-base',
+            'sales_filtered.sqlite',
+        )
+        if os.path.exists(candidate):
+            return candidate
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return direct_path
+
 # 项目路径
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, 'data-base', 'sales_filtered.sqlite')
+DB_PATH = resolve_db_path()
 OUTPUT_DIR = os.path.join(BASE_DIR, 'outputs')
 CHART_DIR = os.path.join(OUTPUT_DIR, 'charts')
 MODEL_DIR = os.path.join(BASE_DIR, 'forecasting', 'models', 'saved')

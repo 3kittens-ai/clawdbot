@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -19,7 +20,35 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-DB_PATH = BASE_DIR / "data-base" / "sales_filtered.sqlite"
+def resolve_db_path() -> Path:
+    env_override = os.environ.get("OPENCLAW_JIUYAN_SALES_DB_PATH")
+    if env_override:
+        return Path(env_override).expanduser()
+
+    direct_path = BASE_DIR / "data-base" / "sales_filtered.sqlite"
+    if direct_path.exists():
+        return direct_path
+
+    current = BASE_DIR
+    for _ in range(8):
+        candidate = (
+            current
+            / "extensions"
+            / "shared"
+            / "jiuyan-sales"
+            / "model-sales-jiuyan"
+            / "data-base"
+            / "sales_filtered.sqlite"
+        )
+        if candidate.exists():
+            return candidate
+        if current.parent == current:
+            break
+        current = current.parent
+    return direct_path
+
+
+DB_PATH = resolve_db_path()
 CITIES_DOC_PATH = BASE_DIR / "docs" / "cities.md"
 TAGS_DOC_PATH = BASE_DIR / "docs" / "tags.md"
 VARIATIONS_DOC_PATH = BASE_DIR / "docs" / "variations.md"
@@ -38,6 +67,11 @@ REQUIRED_COLUMNS = [
     "platform",
     "sales_volume",
     "paid_amount",
+]
+
+OPTIONAL_SKU_COLUMNS = [
+    "latest_inventory",
+    "latest_in_transit",
 ]
 
 COLUMN_ALIASES = {
@@ -80,6 +114,12 @@ COLUMN_ALIASES = {
     "已付金额": "paid_amount",
     "销售金额": "paid_amount",
     "净销售额": "paid_amount",
+    "latest_inventory": "latest_inventory",
+    "最新库存": "latest_inventory",
+    "实际可用数": "latest_inventory",
+    "latest_in_transit": "latest_in_transit",
+    "最新在途": "latest_in_transit",
+    "采购在途": "latest_in_transit",
 }
 
 NULL_CITY_VALUES = {
@@ -507,12 +547,13 @@ def classify_excel_read_error(error: Exception) -> str:
 def normalize_headers(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     source_columns: dict[str, list[str]] = {}
     passthrough_columns: list[str] = []
+    accepted_columns = set(REQUIRED_COLUMNS + OPTIONAL_SKU_COLUMNS)
 
     for col in df.columns:
         original = str(col).strip()
         normalized = original.lower()
         canonical = COLUMN_ALIASES.get(original) or COLUMN_ALIASES.get(normalized) or normalized
-        if canonical in REQUIRED_COLUMNS:
+        if canonical in accepted_columns:
             source_columns.setdefault(canonical, []).append(col)
         else:
             passthrough_columns.append(col)
@@ -537,7 +578,8 @@ def normalize_headers(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 def normalize_dataframe(
     df: pd.DataFrame, known_cities: set[str]
 ) -> tuple[pd.DataFrame, list[str], list[tuple[str, str]]]:
-    normalized = df[REQUIRED_COLUMNS].copy()
+    optional_columns = [column for column in OPTIONAL_SKU_COLUMNS if column in df.columns]
+    normalized = df[REQUIRED_COLUMNS + optional_columns].copy()
     for column in ["shop", "province", "city", "sale_date", "barcode", "product_name", "product_category", "platform"]:
         normalized[column] = normalized[column].map(lambda value: "" if pd.isna(value) else str(value).strip())
 
@@ -561,6 +603,8 @@ def normalize_dataframe(
     for column in ["base_price", "list_price", "paid_amount"]:
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
     normalized["sales_volume"] = pd.to_numeric(normalized["sales_volume"], errors="coerce").fillna(0).astype(int)
+    for column in optional_columns:
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
 
     normalized = normalized.drop_duplicates(subset=REQUIRED_COLUMNS, keep="first")
     return normalized, sorted(set(added_cities)), sorted(set(normalized_city_pairs))
@@ -677,16 +721,39 @@ def build_sku_dimension_rows(
     new_tag_candidates: set[str] = set()
     sku_label_summaries: list[dict[str, object]] = []
 
+    grouped_columns: dict[str, str] = {
+        "sku_name": "last",
+        "product_category": "last",
+        "last_tag_price": "last",
+        "last_base_price": "last",
+        "first_seen_date": "min",
+        "last_seen_date": "max",
+    }
+    if "latest_inventory" in imported_df.columns:
+        grouped_columns["latest_inventory"] = "last"
+    if "latest_in_transit" in imported_df.columns:
+        grouped_columns["latest_in_transit"] = "last"
+
     grouped = (
         imported_df.sort_values(["sale_date", "barcode"])
         .groupby("barcode", as_index=False)
         .agg(
-            sku_name=("product_name", "last"),
-            product_category=("product_category", "last"),
-            last_tag_price=("list_price", "last"),
-            last_base_price=("base_price", "last"),
-            first_seen_date=("sale_date", "min"),
-            last_seen_date=("sale_date", "max"),
+            sku_name=("product_name", grouped_columns["sku_name"]),
+            product_category=("product_category", grouped_columns["product_category"]),
+            last_tag_price=("list_price", grouped_columns["last_tag_price"]),
+            last_base_price=("base_price", grouped_columns["last_base_price"]),
+            first_seen_date=("sale_date", grouped_columns["first_seen_date"]),
+            last_seen_date=("sale_date", grouped_columns["last_seen_date"]),
+            **(
+                {"latest_inventory": ("latest_inventory", grouped_columns["latest_inventory"])}
+                if "latest_inventory" in grouped_columns
+                else {}
+            ),
+            **(
+                {"latest_in_transit": ("latest_in_transit", grouped_columns["latest_in_transit"])}
+                if "latest_in_transit" in grouped_columns
+                else {}
+            ),
         )
     )
 
@@ -713,6 +780,11 @@ def build_sku_dimension_rows(
         product_root = derive_product_root(product_category, family_segments, business_tags)
         variant_key = build_variant_key(product_root, spec_length, spec_size, spec_hook, spec_qty)
 
+        latest_inventory = row.latest_inventory if hasattr(row, "latest_inventory") and not pd.isna(row.latest_inventory) else None
+        latest_in_transit = (
+            row.latest_in_transit if hasattr(row, "latest_in_transit") and not pd.isna(row.latest_in_transit) else None
+        )
+
         dim_rows.append(
             (
                 sku_code,
@@ -728,6 +800,8 @@ def build_sku_dimension_rows(
                 spec_qty or None,
                 family_tags or None,
                 variant_key or None,
+                int(latest_inventory) if latest_inventory is not None else None,
+                int(latest_in_transit) if latest_in_transit is not None else None,
             )
         )
 
@@ -769,26 +843,7 @@ def upsert_dim_sku_and_tags(
         tags_doc_path,
     )
 
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS dim_sku (
-          sku_code TEXT PRIMARY KEY,
-          sku_name TEXT,
-          product_category TEXT,
-          last_tag_price REAL,
-          last_base_price REAL,
-          first_seen_date TEXT,
-          last_seen_date TEXT,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          spec_length TEXT,
-          spec_size TEXT,
-          spec_hook TEXT,
-          spec_qty TEXT,
-          family_tags TEXT,
-          variant_key TEXT
-        )
-        """
-    )
+    ensure_dim_sku_table(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sku_tags (
@@ -805,8 +860,8 @@ def upsert_dim_sku_and_tags(
         INSERT INTO dim_sku (
           sku_code, sku_name, product_category, last_tag_price, last_base_price,
           first_seen_date, last_seen_date, spec_length, spec_size, spec_hook,
-          spec_qty, family_tags, variant_key
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          spec_qty, family_tags, variant_key, latest_inventory, latest_in_transit
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(sku_code) DO UPDATE SET
           sku_name = excluded.sku_name,
           product_category = excluded.product_category,
@@ -828,6 +883,8 @@ def upsert_dim_sku_and_tags(
           spec_qty = excluded.spec_qty,
           family_tags = excluded.family_tags,
           variant_key = excluded.variant_key,
+          latest_inventory = COALESCE(excluded.latest_inventory, dim_sku.latest_inventory),
+          latest_in_transit = COALESCE(excluded.latest_in_transit, dim_sku.latest_in_transit),
           updated_at = CURRENT_TIMESTAMP
         """,
         dim_rows,
@@ -837,6 +894,103 @@ def upsert_dim_sku_and_tags(
         sku_tag_rows,
     )
     return new_tag_candidates, sku_label_summaries
+
+
+def ensure_dim_sku_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dim_sku (
+          sku_code TEXT PRIMARY KEY,
+          sku_name TEXT,
+          product_category TEXT,
+          last_tag_price REAL,
+          last_base_price REAL,
+          first_seen_date TEXT,
+          last_seen_date TEXT,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          spec_length TEXT,
+          spec_size TEXT,
+          spec_hook TEXT,
+          spec_qty TEXT,
+          family_tags TEXT,
+          variant_key TEXT,
+          latest_inventory INTEGER,
+          latest_in_transit INTEGER
+        )
+        """
+    )
+    existing_columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(dim_sku)").fetchall()
+    }
+    if "latest_inventory" not in existing_columns:
+        conn.execute("ALTER TABLE dim_sku ADD COLUMN latest_inventory INTEGER")
+    if "latest_in_transit" not in existing_columns:
+        conn.execute("ALTER TABLE dim_sku ADD COLUMN latest_in_transit INTEGER")
+
+
+def upsert_latest_sku_metrics(conn: sqlite3.Connection, imported_df: pd.DataFrame) -> dict[str, int]:
+    ensure_dim_sku_table(conn)
+    metric_columns = [column for column in OPTIONAL_SKU_COLUMNS if column in imported_df.columns]
+    if not metric_columns:
+        return {"latest_inventory_updated_sku_count": 0, "latest_in_transit_updated_sku_count": 0}
+
+    grouped = (
+        imported_df.sort_values(["sale_date", "barcode"])
+        .groupby("barcode", as_index=False)
+        .agg(
+            **(
+                {"latest_inventory": ("latest_inventory", "last")}
+                if "latest_inventory" in metric_columns
+                else {}
+            ),
+            **(
+                {"latest_in_transit": ("latest_in_transit", "last")}
+                if "latest_in_transit" in metric_columns
+                else {}
+            ),
+        )
+    )
+
+    rows: list[tuple[str, int | None, int | None]] = []
+    latest_inventory_updated = 0
+    latest_in_transit_updated = 0
+    for row in grouped.itertuples(index=False):
+        latest_inventory = (
+            int(row.latest_inventory)
+            if hasattr(row, "latest_inventory") and not pd.isna(row.latest_inventory)
+            else None
+        )
+        latest_in_transit = (
+            int(row.latest_in_transit)
+            if hasattr(row, "latest_in_transit") and not pd.isna(row.latest_in_transit)
+            else None
+        )
+        if latest_inventory is None and latest_in_transit is None:
+            continue
+        if latest_inventory is not None:
+            latest_inventory_updated += 1
+        if latest_in_transit is not None:
+            latest_in_transit_updated += 1
+        rows.append((str(row.barcode).strip(), latest_inventory, latest_in_transit))
+
+    if rows:
+        conn.executemany(
+            """
+            INSERT INTO dim_sku (sku_code, latest_inventory, latest_in_transit)
+            VALUES (?, ?, ?)
+            ON CONFLICT(sku_code) DO UPDATE SET
+              latest_inventory = COALESCE(excluded.latest_inventory, dim_sku.latest_inventory),
+              latest_in_transit = COALESCE(excluded.latest_in_transit, dim_sku.latest_in_transit),
+              updated_at = CURRENT_TIMESTAMP
+            """,
+            rows,
+        )
+
+    return {
+        "latest_inventory_updated_sku_count": latest_inventory_updated,
+        "latest_in_transit_updated_sku_count": latest_in_transit_updated,
+    }
 
 
 def refresh_variations_doc(conn: sqlite3.Connection, output_path: Path) -> None:
@@ -966,7 +1120,8 @@ def import_rows(
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     row_tuples = []
-    for row in rows.itertuples(index=False, name=None):
+    sales_rows = rows[REQUIRED_COLUMNS]
+    for row in sales_rows.itertuples(index=False, name=None):
         row_tuples.append(
             (
                 *row,
@@ -1188,6 +1343,7 @@ def main() -> None:
         pass
     try:
         stats, inserted_df, new_sku_codes = import_rows_with_retry(conn, import_df)
+        latest_metric_stats = upsert_latest_sku_metrics(conn, import_df)
         new_sku_df = (
             inserted_df[inserted_df["barcode"].astype(str).isin(new_sku_codes)].copy()
             if not inserted_df.empty
@@ -1219,6 +1375,8 @@ def main() -> None:
             "start": stats["inserted_min_sale_date"],
             "end": stats["inserted_max_sale_date"],
         },
+        "latest_inventory_updated_sku_count": latest_metric_stats["latest_inventory_updated_sku_count"],
+        "latest_in_transit_updated_sku_count": latest_metric_stats["latest_in_transit_updated_sku_count"],
         "added_cities": added_cities,
         "normalized_cities": [
             {"from": source, "to": target} for source, target in normalized_city_pairs

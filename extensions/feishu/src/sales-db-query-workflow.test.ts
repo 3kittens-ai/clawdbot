@@ -93,6 +93,28 @@ describe("parseSalesDbQueryRequest", () => {
     });
   });
 
+  it("parses previous-calendar-week total queries", () => {
+    expect(parseSalesDbQueryRequest("上周总销量")).toEqual({
+      kind: "aggregate",
+      metric: "total_qty",
+      timeRange: { kind: "previous_calendar_week", label: "上周" },
+      groupBy: undefined,
+      sortDirection: undefined,
+      limit: undefined,
+    });
+  });
+
+  it("parses specific-date total queries", () => {
+    expect(parseSalesDbQueryRequest("2026-03-24 的总销量")).toEqual({
+      kind: "aggregate",
+      metric: "total_qty",
+      timeRange: { kind: "specific_date", date: "2026-03-24", label: "2026-03-24" },
+      groupBy: undefined,
+      sortDirection: undefined,
+      limit: undefined,
+    });
+  });
+
   it("parses previous-week weekday top-city queries", () => {
     const request = parseSalesDbQueryRequest("上周五哪个城市销量最高");
     expect(request?.kind).toBe("aggregate");
@@ -356,6 +378,55 @@ describe("querySalesDbForTest", () => {
       resolvedRangeLabel: "2026-03-17 到 2026-03-23",
       latestDate: "2026-03-23",
       rows: [{ label: "销量", value: 100 }],
+    });
+  });
+
+  it("returns a previous-calendar-week aggregate based on the latest date", () => {
+    const dbPath = createTempSalesDbForTest([
+      { saleDate: "2026-03-16", province: "浙江", salesVolume: 10 },
+      { saleDate: "2026-03-18", province: "江苏", salesVolume: 20 },
+      { saleDate: "2026-03-22", province: "广东", salesVolume: 30 },
+      { saleDate: "2026-03-24", province: "广东", salesVolume: 40 },
+    ]);
+    tempDbPaths.push(dbPath);
+
+    expect(
+      querySalesDbForTest(dbPath, {
+        kind: "aggregate",
+        metric: "total_qty",
+        timeRange: { kind: "previous_calendar_week", label: "上周" },
+      }),
+    ).toEqual({
+      kind: "aggregate",
+      metric: "total_qty",
+      timeLabel: "上周",
+      resolvedRangeLabel: "2026-03-16 到 2026-03-22",
+      latestDate: "2026-03-24",
+      rows: [{ label: "销量", value: 60 }],
+    });
+  });
+
+  it("returns a specific-date aggregate", () => {
+    const dbPath = createTempSalesDbForTest([
+      { saleDate: "2026-03-23", province: "浙江", salesVolume: 10 },
+      { saleDate: "2026-03-24", province: "江苏", salesVolume: 20 },
+      { saleDate: "2026-03-24", province: "广东", salesVolume: 30 },
+    ]);
+    tempDbPaths.push(dbPath);
+
+    expect(
+      querySalesDbForTest(dbPath, {
+        kind: "aggregate",
+        metric: "total_qty",
+        timeRange: { kind: "specific_date", date: "2026-03-24", label: "2026-03-24" },
+      }),
+    ).toEqual({
+      kind: "aggregate",
+      metric: "total_qty",
+      timeLabel: "2026-03-24",
+      resolvedRangeLabel: "2026-03-24",
+      latestDate: "2026-03-24",
+      rows: [{ label: "销量", value: 50 }],
     });
   });
 

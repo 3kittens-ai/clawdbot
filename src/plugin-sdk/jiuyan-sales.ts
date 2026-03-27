@@ -39,8 +39,12 @@ export type JiuyanSalesRuntimePaths = {
   forecastingScriptPath: string;
   salesImportScriptPath: string;
   formulaForecastScriptPath: string;
+  scheduleWorkbookScriptPath: string;
   dbPath: string;
   outputsDir: string;
+  formulaOutputsDir: string;
+  scheduleWorkbookPath: string;
+  scheduleWorkbookSourcePath: string;
 };
 
 export type ForecastingAction = "backtest" | "train" | "predict" | "latest_predict";
@@ -62,7 +66,21 @@ export type FormulaForecastRequest = {
   normalizedFormula: string;
   horizonMonths: number;
   topK: number;
+  targetTurnoverDays: number;
+  productCategory?: string;
+  topBasis: "latest_day" | "latest_complete_month" | "trailing_12_months" | "all_time";
+  scopeMode?: "top" | "attachment_excel";
+  skuListExcelPath?: string;
 };
+
+const DEFAULT_FORMULA_FORECAST_MONTHS = 5;
+const DEFAULT_FORMULA_FORECAST_TOP_K = 50;
+const DEFAULT_FORMULA_FORECAST_TARGET_TURNOVER_DAYS = 45;
+const DEFAULT_FORMULA_FORECAST_TOP_BASIS = "latest_complete_month";
+const DEFAULT_FORMULA_FORECAST_STRATEGY = "builtin_default_5m";
+const DEFAULT_FORMULA_FORECAST_TEXT =
+  "第1个月=max(近月销量×历史同期月份比例, 本月累计销量折算值, 短期销量折算值); 第2-5个月=上个月预测×去年同期相邻月份销量比";
+const JIUYAN_PRODUCT_CATEGORIES = ["加长子线", "无结子线", "线组", "鱼钩"] as const;
 
 export type FormulaForecastJobResult = {
   file_path: string;
@@ -70,6 +88,26 @@ export type FormulaForecastJobResult = {
   summary_sheet: string;
   formula_sheet: string;
   latest_month: string;
+};
+
+const FORMULA_FORECAST_TOP_BASIS_LABELS = {
+  latest_day: "昨天销量",
+  latest_complete_month: "上个月销量",
+  trailing_12_months: "近1年销量",
+  all_time: "历史销量",
+} satisfies Record<FormulaForecastRequest["topBasis"], string>;
+
+export type ScheduleWorkbookRequest = {
+  workbookLabel: string;
+};
+
+export type ScheduleWorkbookJobResult = {
+  file_path: string;
+  file_name: string;
+  source_file_path: string;
+  source_file_name: string;
+  latest_date: string;
+  updated_sku_count: number;
 };
 
 export type JiuyanSalesChannelAdapter = {
@@ -96,6 +134,8 @@ export type SalesImportResult =
       inserted_sku_count: number;
       new_sku_count: number;
       date_range?: { start?: string; end?: string };
+      latest_inventory_updated_sku_count?: number;
+      latest_in_transit_updated_sku_count?: number;
       added_cities?: string[];
       normalized_cities?: Array<{ from: string; to: string }>;
       added_tags?: string[];
@@ -133,6 +173,7 @@ type QueryTimeRange =
   | { kind: "latest_day"; label: string }
   | { kind: "latest_minus_days"; days: number; label: string }
   | { kind: "last_n_days"; days: number; label: string }
+  | { kind: "previous_calendar_week"; label: string }
   | { kind: "last_n_months"; months: number; label: string }
   | { kind: "specific_year"; year: string; label: string }
   | { kind: "specific_date"; date: string; label: string }
@@ -352,6 +393,9 @@ function normalizeFormulaRequestText(text: string): string {
 }
 
 function normalizeFormulaText(formulaText: string): string {
+  if (formulaText === DEFAULT_FORMULA_FORECAST_TEXT) {
+    return DEFAULT_FORMULA_FORECAST_STRATEGY;
+  }
   return formulaText
     .replace(/最近一个月销量/gu, "m1")
     .replace(/最近1个月销量/gu, "m1")
@@ -407,15 +451,39 @@ export function resolveJiuyanSalesModelRoot(): string {
   candidateRootsFrom(moduleDir, candidateBases, seen);
   candidateRootsFrom(process.cwd(), candidateBases, seen);
 
+  const cwdShared = path.resolve(process.cwd(), sharedSuffix);
+  const cwdLegacy = path.resolve(process.cwd(), legacySuffix);
+  const moduleShared = path.resolve(
+    moduleDir,
+    "../../extensions/shared/jiuyan-sales/model-sales-jiuyan",
+  );
+  const moduleLegacy = path.resolve(
+    moduleDir,
+    "../../extensions/feishu/jiuyan-sales/model-sales-jiuyan",
+  );
+
   const candidates = [
+    cwdShared,
+    cwdLegacy,
+    moduleShared,
+    moduleLegacy,
     ...candidateBases.map((base) => path.join(base, sharedSuffix)),
     ...candidateBases.map((base) => path.join(base, legacySuffix)),
-    path.resolve(moduleDir, "../../extensions/shared/jiuyan-sales/model-sales-jiuyan"),
     path.resolve(process.cwd(), "extensions/shared/jiuyan-sales/model-sales-jiuyan"),
     path.resolve(process.cwd(), "extensions/feishu/jiuyan-sales/model-sales-jiuyan"),
   ];
 
-  for (const candidate of candidates) {
+  const existingCandidates = candidates.filter(
+    (candidate, index) => candidates.indexOf(candidate) === index && fs.existsSync(candidate),
+  );
+  const existingWithDb = existingCandidates.find((candidate) =>
+    fs.existsSync(path.join(candidate, "data-base", "sales_filtered.sqlite")),
+  );
+  if (existingWithDb) {
+    return existingWithDb;
+  }
+
+  for (const candidate of existingCandidates) {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -425,13 +493,21 @@ export function resolveJiuyanSalesModelRoot(): string {
 
 export function resolveJiuyanSalesRuntimePaths(): JiuyanSalesRuntimePaths {
   const modelRoot = resolveJiuyanSalesModelRoot();
+  const formulaOutputsDir = path.join(modelRoot, "outputs", "formula");
   return {
     modelRoot,
     forecastingScriptPath: path.join(modelRoot, "scripts", "forecasting_job.py"),
     salesImportScriptPath: path.join(modelRoot, "scripts", "sales_import_job.py"),
     formulaForecastScriptPath: path.join(modelRoot, "scripts", "sales_expression_forecast_job.py"),
+    scheduleWorkbookScriptPath: path.join(modelRoot, "scripts", "update_hook_schedule_workbook.py"),
     dbPath: path.join(modelRoot, "data-base", "sales_filtered.sqlite"),
     outputsDir: path.join(modelRoot, "outputs", "final"),
+    formulaOutputsDir,
+    scheduleWorkbookPath: path.join(formulaOutputsDir, "20260324计划排单表-常规鱼钩.xlsx"),
+    scheduleWorkbookSourcePath: path.join(
+      formulaOutputsDir,
+      "20260301-0323商品主题分析_全商品档案_20260324092322_149676800_1.xlsx",
+    ),
   };
 }
 
@@ -481,6 +557,7 @@ function runJsonPythonJob<T>(params: {
   args: string[];
   pythonMissingMessage: string;
   missingPaths?: Array<{ path: string; message: string }>;
+  env?: NodeJS.ProcessEnv;
 }): Promise<PythonJobCompletion<T>> {
   const pythonExecutable = resolveJiuyanSalesPythonExecutable();
   if (!pythonExecutable) {
@@ -504,6 +581,10 @@ function runJsonPythonJob<T>(params: {
   return new Promise<PythonJobCompletion<T>>((resolve, reject) => {
     const proc = spawn(pythonExecutable, [params.scriptPath, ...params.args], {
       cwd: params.cwd,
+      env: {
+        ...process.env,
+        ...params.env,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -549,7 +630,6 @@ export function parseForecastingWorkflowRequest(
   const normalized = normalizeText(content);
   if (
     /(发我|给我|回我|把)/u.test(normalized) &&
-    /(最新|最近一次)/u.test(normalized) &&
     /(销量预测|预测结果|生产推理|生产预测|推理结果|excel|xlsx|文件)/iu.test(normalized)
   ) {
     return { action: "latest_predict", label: "最新生产推理结果" };
@@ -570,6 +650,51 @@ function logWithAdapter(adapter: JiuyanSalesChannelAdapter, message: string): vo
   adapter.log?.(adapter.logPrefix ? `${adapter.logPrefix}: ${message}` : message);
 }
 
+function isRetryableFileSendError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /status code 500/i.test(message) ||
+    /internal server error/i.test(message) ||
+    /\b40009\b/.test(message) ||
+    /timeout/i.test(message)
+  );
+}
+
+async function delayMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendJiuyanFileWithRetry(params: {
+  adapter: JiuyanSalesChannelAdapter;
+  file: { path: string; fileName: string };
+  logContext: string;
+}): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      await params.adapter.sendFile(params.file);
+      if (attempt > 1) {
+        logWithAdapter(
+          params.adapter,
+          `${params.logContext}: file send recovered on retry ${attempt}/2`,
+        );
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || !isRetryableFileSendError(error)) {
+        throw error;
+      }
+      logWithAdapter(
+        params.adapter,
+        `${params.logContext}: transient file send failure on attempt ${attempt}/2, retrying: ${String(error)}`,
+      );
+      await delayMs(1200);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 export async function handleJiuyanForecastingMessage(params: {
   content: string;
   adapter: JiuyanSalesChannelAdapter;
@@ -586,9 +711,13 @@ export async function handleJiuyanForecastingMessage(params: {
       return true;
     }
     await params.adapter.sendText("已找到最新的生产推理结果，正在回传 Excel。");
-    await params.adapter.sendFile({
-      path: latestExcelPath,
-      fileName: path.basename(latestExcelPath),
+    await sendJiuyanFileWithRetry({
+      adapter: params.adapter,
+      file: {
+        path: latestExcelPath,
+        fileName: path.basename(latestExcelPath),
+      },
+      logContext: "latest predict file send",
     });
     logWithAdapter(params.adapter, `latest predict file sent: file=${latestExcelPath}`);
     return true;
@@ -611,9 +740,13 @@ export async function handleJiuyanForecastingMessage(params: {
       await params.adapter.sendText(`Forecasting ${request.label}已完成，正在回传结果文件。`);
       for (const attachment of result.attachments ?? []) {
         try {
-          await params.adapter.sendFile({
-            path: attachment.path,
-            fileName: attachment.file_name,
+          await sendJiuyanFileWithRetry({
+            adapter: params.adapter,
+            file: {
+              path: attachment.path,
+              fileName: attachment.file_name,
+            },
+            logContext: `forecasting workflow file send (${jobId})`,
           });
           logWithAdapter(
             params.adapter,
@@ -649,6 +782,9 @@ export async function executeForecastingJob(
     cwd: runtimePaths.modelRoot,
     args: ["--action", request.action, "--job-id", jobId],
     pythonMissingMessage: "未找到可执行的 Python。",
+    env: {
+      OPENCLAW_JIUYAN_SALES_DB_PATH: runtimePaths.dbPath,
+    },
     missingPaths: [
       { path: runtimePaths.modelRoot, message: `模型目录不存在：${runtimePaths.modelRoot}` },
     ],
@@ -679,6 +815,14 @@ export function parseFormulaForecastRequest(content: string): FormulaForecastReq
   let horizonMonths: number;
   let topK: number;
   let formulaText: string;
+  const productCategory = extractFormulaForecastProductCategory(normalized);
+  const topBasis = extractFormulaForecastTopBasis(normalized);
+  const scopeMode = extractFormulaForecastScopeMode(normalized);
+  const targetTurnoverDaysMatch = normalized.match(/库存计划量可周转天数\s*(\d{1,3})\s*天?/u);
+  const targetTurnoverDays = Number.parseInt(
+    targetTurnoverDaysMatch?.[1] ?? String(DEFAULT_FORMULA_FORECAST_TARGET_TURNOVER_DAYS),
+    10,
+  );
 
   if (legacyMatch?.groups) {
     horizonMonths = Number.parseInt(legacyMatch.groups.months, 10);
@@ -689,12 +833,14 @@ export function parseFormulaForecastRequest(content: string): FormulaForecastReq
       return null;
     }
     const monthsMatch = normalized.match(/未来\s*(\d{1,2})\s*个?月/u);
-    horizonMonths = Number.parseInt(monthsMatch?.[1] ?? "", 10);
-    if (!Number.isFinite(horizonMonths)) {
-      return null;
-    }
-    const topKMatch = normalized.match(/(?:top|前)\s*(\d{1,4})\s*(?:个)?\s*sku/iu);
-    topK = Number.parseInt(topKMatch?.[1] ?? "50", 10);
+    horizonMonths = Number.parseInt(
+      monthsMatch?.[1] ?? String(DEFAULT_FORMULA_FORECAST_MONTHS),
+      10,
+    );
+    const topKMatch = normalized.match(
+      /(?:top|前)\s*(\d{1,4})(?:\s*个)?(?:\s*的?\s*[\u4e00-\u9fa5a-z0-9]+)*(?:\s*sku)?/iu,
+    );
+    topK = Number.parseInt(topKMatch?.[1] ?? String(DEFAULT_FORMULA_FORECAST_TOP_K), 10);
     formulaText = inferNaturalLanguageFormulaText(normalized);
   }
 
@@ -706,10 +852,53 @@ export function parseFormulaForecastRequest(content: string): FormulaForecastReq
     normalizedFormula: normalizeFormulaText(formulaText),
     horizonMonths: Math.min(Math.max(horizonMonths, 1), 24),
     topK: Math.min(Math.max(topK, 1), 2000),
+    targetTurnoverDays: Math.min(Math.max(targetTurnoverDays, 1), 365),
+    productCategory,
+    topBasis,
+    scopeMode,
   };
 }
 
+function extractFormulaForecastScopeMode(normalized: string): FormulaForecastRequest["scopeMode"] {
+  if (
+    /(文件|附件|表)中(?:的)?\s*sku/iu.test(normalized) ||
+    /(文件|附件|表)中的是\s*sku/iu.test(normalized) ||
+    /(文件|附件|表)里(?:的)?\s*sku/iu.test(normalized) ||
+    /(文件|附件|表)里的是\s*sku/iu.test(normalized) ||
+    /(文件|附件|表).*(?:中|里的?)\s*sku/iu.test(normalized) ||
+    /sku.*(文件|附件|表).*(?:中|里的?)/iu.test(normalized)
+  ) {
+    return "attachment_excel";
+  }
+  return "top";
+}
+
+function extractFormulaForecastProductCategory(normalized: string): string | undefined {
+  return JIUYAN_PRODUCT_CATEGORIES.find((category) => normalized.includes(category));
+}
+
+function extractFormulaForecastTopBasis(normalized: string): FormulaForecastRequest["topBasis"] {
+  if (/历史销量/u.test(normalized)) {
+    return "all_time";
+  }
+  if (/近\s*1\s*年销量/u.test(normalized) || /近一年销量/u.test(normalized)) {
+    return "trailing_12_months";
+  }
+  if (/上个月销量/u.test(normalized)) {
+    return "latest_complete_month";
+  }
+  if (/昨天销量/u.test(normalized)) {
+    return "latest_day";
+  }
+  return DEFAULT_FORMULA_FORECAST_TOP_BASIS;
+}
+
 function inferNaturalLanguageFormulaText(normalized: string): string {
+  const hasExplicitFormulaHint =
+    /(环比|最近值)/u.test(normalized) ||
+    /(同比|去年同期|全年同比)/u.test(normalized) ||
+    /最近\d{1,2}个月(?:平均|总)?销量/u.test(normalized) ||
+    /上个月销量/u.test(normalized);
   const explicitWeightMatch = normalized.match(/各\s*(\d+(?:\.\d+)?)\s*的?权重/u);
   if (/(环比|最近值)/u.test(normalized) && /(同比|去年同期|全年同比)/u.test(normalized)) {
     const weight = Number.parseFloat(explicitWeightMatch?.[1] ?? "0.5");
@@ -724,6 +913,9 @@ function inferNaturalLanguageFormulaText(normalized: string): string {
   }
   if (/(环比|最近值)/u.test(normalized)) {
     return "最近一个月销量";
+  }
+  if (!hasExplicitFormulaHint) {
+    return DEFAULT_FORMULA_FORECAST_TEXT;
   }
   return "最近一个月销量";
 }
@@ -747,6 +939,12 @@ export async function executeFormulaForecastJob(
       String(request.horizonMonths),
       "--top-k",
       String(request.topK),
+      "--target-turnover-days",
+      String(request.targetTurnoverDays),
+      "--top-basis",
+      request.topBasis,
+      ...(request.skuListExcelPath ? ["--sku-list-excel", request.skuListExcelPath] : []),
+      ...(request.productCategory ? ["--product-category", request.productCategory] : []),
       "--job-id",
       jobId,
     ],
@@ -758,32 +956,166 @@ export async function executeFormulaForecastJob(
   });
 }
 
+function formatFormulaForecastScope(request: FormulaForecastRequest): string {
+  if (request.scopeMode === "attachment_excel") {
+    return `文件中的 SKU，未来 ${request.horizonMonths} 个月`;
+  }
+  const scopeParts = [
+    `${FORMULA_FORECAST_TOP_BASIS_LABELS[request.topBasis]} Top ${request.topK} SKU`,
+    `未来 ${request.horizonMonths} 个月`,
+  ];
+  if (request.productCategory) {
+    scopeParts.unshift(request.productCategory);
+  }
+  return scopeParts.join("，");
+}
+
+export function parseScheduleWorkbookRequest(content: string): ScheduleWorkbookRequest | null {
+  const normalized = normalizeText(content);
+  if (!/更新|刷新|生成|重做|重算|同步/u.test(normalized)) {
+    return null;
+  }
+  if (!/(计划排单表|排单表|常规鱼钩)/u.test(normalized)) {
+    return null;
+  }
+  return {
+    workbookLabel: "常规鱼钩计划排单表",
+  };
+}
+
+export async function executeScheduleWorkbookJob(
+  request: ScheduleWorkbookRequest,
+  jobId = `schedule-workbook-${Date.now()}-${randomUUID().slice(0, 8)}`,
+): Promise<PythonJobCompletion<ScheduleWorkbookJobResult>> {
+  const runtimePaths = resolveJiuyanSalesRuntimePaths();
+  return runJsonPythonJob<ScheduleWorkbookJobResult>({
+    scriptPath: runtimePaths.scheduleWorkbookScriptPath,
+    cwd: runtimePaths.modelRoot,
+    args: [
+      "--db",
+      runtimePaths.dbPath,
+      "--source-workbook",
+      runtimePaths.scheduleWorkbookSourcePath,
+      "--plan-workbook",
+      runtimePaths.scheduleWorkbookPath,
+      "--job-id",
+      jobId,
+    ],
+    pythonMissingMessage: `当前 gateway 运行环境未找到可执行的 Python。已尝试：${listJiuyanSalesPythonCandidates().join(", ")}`,
+    missingPaths: [
+      { path: runtimePaths.modelRoot, message: `模型目录不存在：${runtimePaths.modelRoot}` },
+      { path: runtimePaths.dbPath, message: `销量数据库不存在：${runtimePaths.dbPath}` },
+      {
+        path: runtimePaths.scheduleWorkbookSourcePath,
+        message: `排单表数据源不存在：${runtimePaths.scheduleWorkbookSourcePath}`,
+      },
+      {
+        path: runtimePaths.scheduleWorkbookPath,
+        message: `计划排单表不存在：${runtimePaths.scheduleWorkbookPath}`,
+      },
+    ],
+  });
+}
+
+export async function handleJiuyanScheduleWorkbookMessage(params: {
+  content: string;
+  adapter: JiuyanSalesChannelAdapter;
+}): Promise<boolean> {
+  const request = parseScheduleWorkbookRequest(params.content);
+  if (!request) {
+    return false;
+  }
+  const jobId = `schedule-workbook-${Date.now()}`;
+  await params.adapter.sendText(
+    `已开始用当前数据库刷新 ${request.workbookLabel}，完成后我会把更新后的 Excel 回传给你。`,
+  );
+  logWithAdapter(
+    params.adapter,
+    `schedule workbook requested (${jobId}): ${request.workbookLabel}`,
+  );
+  void executeScheduleWorkbookJob(request, jobId)
+    .then(async ({ result }) => {
+      logWithAdapter(
+        params.adapter,
+        `schedule workbook json (${jobId}): ${JSON.stringify(result)}`,
+      );
+      await params.adapter.sendText(
+        `排单表已刷新，正在回传 Excel。\n数据截止：${result.latest_date}\n更新 SKU 数：${result.updated_sku_count}`,
+      );
+      try {
+        await sendJiuyanFileWithRetry({
+          adapter: params.adapter,
+          file: {
+            path: result.file_path,
+            fileName: result.file_name,
+          },
+          logContext: `schedule workbook file send (${jobId})`,
+        });
+        logWithAdapter(
+          params.adapter,
+          `schedule workbook file sent (${jobId}): file=${result.file_path}`,
+        );
+      } catch (error) {
+        logWithAdapter(
+          params.adapter,
+          `schedule workbook file send failed (${jobId}): ${String(error)}`,
+        );
+        await params.adapter.sendText(`排单表已刷新，但 Excel 回传失败：${String(error)}`);
+      }
+    })
+    .catch(async (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logWithAdapter(params.adapter, `schedule workbook failed (${jobId}): ${message}`);
+      await params.adapter.sendText(
+        message.includes("Python")
+          ? `排单表刷新失败。\n原因：${message}\n已尝试 Python 路径：${listJiuyanSalesPythonCandidates().join(", ")}`
+          : `排单表刷新失败。\n原因：${message}`,
+      );
+    });
+  return true;
+}
+
 export async function handleJiuyanFormulaForecastMessage(params: {
   content: string;
+  attachments?: readonly SalesAttachmentLike[];
   adapter: JiuyanSalesChannelAdapter;
 }): Promise<boolean> {
   const request = parseFormulaForecastRequest(params.content);
   if (!request) {
     return false;
   }
+  if (request.scopeMode === "attachment_excel") {
+    const excelAttachment = pickSalesExcelAttachment(params.attachments ?? []);
+    if (!excelAttachment) {
+      await params.adapter.sendText(
+        "没有检测到 Excel 附件。请直接发送 Excel，或回复一个 Excel 文件并附上“公式计算销量 文件中的 sku”。",
+      );
+      return true;
+    }
+    request.skuListExcelPath = excelAttachment.path;
+  }
   const jobId = `formula-forecast-${Date.now()}`;
   await params.adapter.sendText(
-    `已开始按公式计算销量。\n公式：${request.formulaText}\n范围：Top ${request.topK} SKU，未来 ${request.horizonMonths} 个月\n计算完成后我会把 Excel 回传给你。`,
+    `已开始按公式计算销量。\n公式：${request.formulaText}\n范围：${formatFormulaForecastScope(request)}\n库存计划量可周转天数：${request.targetTurnoverDays} 天\n计算完成后我会把 Excel 回传给你。`,
   );
   logWithAdapter(
     params.adapter,
-    `formula forecast requested (${jobId}): formula="${request.formulaText}", normalized="${request.normalizedFormula}", months=${request.horizonMonths}, topK=${request.topK}`,
+    `formula forecast requested (${jobId}): formula="${request.formulaText}", normalized="${request.normalizedFormula}", months=${request.horizonMonths}, topK=${request.topK}, targetTurnoverDays=${request.targetTurnoverDays}, productCategory="${request.productCategory ?? ""}"`,
   );
   void executeFormulaForecastJob(request, jobId)
     .then(async ({ result }) => {
       logWithAdapter(params.adapter, `formula forecast json (${jobId}): ${JSON.stringify(result)}`);
       await params.adapter.sendText(
-        `公式预测已完成，正在回传 Excel。\n公式：${request.formulaText}\n范围：Top ${request.topK} SKU，未来 ${request.horizonMonths} 个月\n历史截止：${result.latest_month}`,
+        `公式预测已完成，正在回传 Excel。\n公式：${request.formulaText}\n范围：${formatFormulaForecastScope(request)}\n库存计划量可周转天数：${request.targetTurnoverDays} 天\n历史截止：${result.latest_month}`,
       );
       try {
-        await params.adapter.sendFile({
-          path: result.file_path,
-          fileName: result.file_name,
+        await sendJiuyanFileWithRetry({
+          adapter: params.adapter,
+          file: {
+            path: result.file_path,
+            fileName: result.file_name,
+          },
+          logContext: `formula forecast file send (${jobId})`,
         });
         logWithAdapter(
           params.adapter,
@@ -812,7 +1144,7 @@ export async function handleJiuyanFormulaForecastMessage(params: {
 export function parseSalesImportRequest(content: string): boolean {
   const normalized = normalizeText(content);
   return (
-    /(导入|入库|写入)/u.test(normalized) && /(excel|xlsx|表格|数据库|sales)/iu.test(normalized)
+    /(导入|入库|写入|更新)/u.test(normalized) && /(excel|xlsx|表格|数据库|sales)/iu.test(normalized)
   );
 }
 
@@ -839,8 +1171,11 @@ export async function executeSalesImportJob(
   return runJsonPythonJob<SalesImportResult>({
     scriptPath: runtimePaths.salesImportScriptPath,
     cwd: runtimePaths.modelRoot,
-    args: ["--excel-path", excelPath, "--job-id", jobId],
+    args: ["--excel-path", excelPath, "--job-id", jobId, "--db-path", runtimePaths.dbPath],
     pythonMissingMessage: "未找到可执行的 Python。",
+    env: {
+      OPENCLAW_JIUYAN_SALES_DB_PATH: runtimePaths.dbPath,
+    },
     missingPaths: [
       { path: runtimePaths.modelRoot, message: `模型目录不存在：${runtimePaths.modelRoot}` },
     ],
@@ -922,6 +1257,15 @@ export function summarizeSalesImportResult(
     result.added_tags && result.added_tags.length > 0
       ? `\n已更新 tags.md：${result.added_tags.join("、")}`
       : "";
+  const latestMetricNotes = [
+    result.latest_inventory_updated_sku_count
+      ? `最新库存已更新 SKU 数：${result.latest_inventory_updated_sku_count}`
+      : null,
+    result.latest_in_transit_updated_sku_count
+      ? `最新在途已更新 SKU 数：${result.latest_in_transit_updated_sku_count}`
+      : null,
+  ].filter(Boolean);
+  const latestMetricNote = latestMetricNotes.length > 0 ? `\n${latestMetricNotes.join("\n")}` : "";
   const newSkuLabelNote =
     result.new_sku_labels && result.new_sku_labels.length > 0
       ? `\n新增 SKU 标签：\n${result.new_sku_labels
@@ -949,6 +1293,7 @@ export function summarizeSalesImportResult(
     normalizedCityNote +
     cityNote +
     tagNote +
+    latestMetricNote +
     newSkuLabelNote
   );
 }
@@ -973,6 +1318,15 @@ function formatDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function parseIsoDate(dateText: string): Date | null {
+  const match = dateText.match(/^(\d{4})-(\d{2})-(\d{2})$/u);
+  if (!match) {
+    return null;
+  }
+  const candidate = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00`);
+  return Number.isNaN(candidate.getTime()) ? null : candidate;
 }
 
 function currentYear(): number {
@@ -1011,6 +1365,27 @@ function resolveYear(yearText: string): string | null {
   return String(year);
 }
 
+function resolveSpecificDate(
+  yearText: string | undefined,
+  monthText: string,
+  dayText: string,
+): string | null {
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    return null;
+  }
+  if (!Number.isInteger(day) || day < 1 || day > 31) {
+    return null;
+  }
+  const year = yearText ? resolveYear(yearText) : String(currentYear());
+  if (!year) {
+    return null;
+  }
+  const normalized = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return parseIsoDate(normalized) ? normalized : null;
+}
+
 function resolvePreviousWeekdayDate(weekdayText: string): string {
   const weekdayMap: Record<string, number> = {
     一: 1,
@@ -1033,6 +1408,22 @@ function resolvePreviousWeekdayDate(weekdayText: string): string {
 }
 
 function parseTimeRange(normalized: string): QueryTimeRange | null {
+  const hyphenDateMatch = normalized.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/u);
+  if (hyphenDateMatch) {
+    const date = resolveSpecificDate(hyphenDateMatch[1], hyphenDateMatch[2], hyphenDateMatch[3]);
+    if (date) {
+      return { kind: "specific_date", date, label: date };
+    }
+  }
+  const chineseDateMatch = normalized.match(
+    /(?:(\d{2,4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/u,
+  );
+  if (chineseDateMatch) {
+    const date = resolveSpecificDate(chineseDateMatch[1], chineseDateMatch[2], chineseDateMatch[3]);
+    if (date) {
+      return { kind: "specific_date", date, label: date };
+    }
+  }
   const monthMatch = normalized.match(/(?:(\d{2,4})\s*年\s*)?(\d{1,2})\s*月/u);
   if (monthMatch) {
     const month = resolveYearMonth(monthMatch[1], monthMatch[2]);
@@ -1047,6 +1438,9 @@ function parseTimeRange(normalized: string): QueryTimeRange | null {
       date: resolvePreviousWeekdayDate(lastWeekdayMatch[1]),
       label: `上周${lastWeekdayMatch[1]}`,
     };
+  }
+  if (/上周/u.test(normalized)) {
+    return { kind: "previous_calendar_week", label: "上周" };
   }
   if (/(最近|最新).*(一天|1天)/u.test(normalized)) {
     return { kind: "latest_day", label: "最近一天" };
@@ -1418,6 +1812,26 @@ function resolveTimeFilter(
       params: [startDate ?? "", latestDate],
       latestDate,
       resolvedRangeLabel: startDate ? `${startDate} 到 ${latestDate}` : latestDate,
+    };
+  }
+  if (timeRange.kind === "previous_calendar_week") {
+    const latest = parseIsoDate(latestDate);
+    if (!latest) {
+      return { clause: "1 = 0", params: [], latestDate, resolvedRangeLabel: "无可用日期" };
+    }
+    const currentWeekMonday = new Date(latest);
+    currentWeekMonday.setDate(latest.getDate() - ((latest.getDay() + 6) % 7));
+    const previousWeekMonday = new Date(currentWeekMonday);
+    previousWeekMonday.setDate(currentWeekMonday.getDate() - 7);
+    const previousWeekSunday = new Date(previousWeekMonday);
+    previousWeekSunday.setDate(previousWeekMonday.getDate() + 6);
+    const startDate = formatDate(previousWeekMonday);
+    const endDate = formatDate(previousWeekSunday);
+    return {
+      clause: "sale_date BETWEEN ? AND ?",
+      params: [startDate, endDate],
+      latestDate,
+      resolvedRangeLabel: `${startDate} 到 ${endDate}`,
     };
   }
   if (timeRange.kind === "last_n_months") {
